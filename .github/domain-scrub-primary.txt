@@ -1,0 +1,9 @@
+plan2bid
+estimation
+\btrade\b
+construction
+\bMEP\b
+\bARCH\b
+general_contractor
+\btakeoff\b
+blueprint

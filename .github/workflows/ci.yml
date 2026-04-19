@@ -1,0 +1,83 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    # All tests are mocked — ubuntu is faster than macos and avoids osascript entirely.
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install runtime + dev dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Import worker package
+        run: python -c "import worker"
+
+      - name: Validate example configs against schema
+        env:
+          SUPABASE_URL: http://localhost:54321
+          SUPABASE_SERVICE_ROLE_KEY: dummy
+          SUPABASE_DB_URL: postgresql://user:pass@localhost:5432/postgres
+        run: |
+          python -m worker.config.loader --validate examples/minimal
+          python -m worker.config.loader --validate examples/fan-out
+
+      - name: Validate schema negatives all fail
+        run: python tests/validate_schema_negatives.py
+
+      - name: Parse schema/template.sql with pglast
+        run: python -c "import pglast; pglast.parse_sql(open('schema/template.sql').read())"
+
+      - name: Verify reaper RPC present in schema
+        run: grep -q "create or replace function requeue_stale_jobs_for_worker" schema/template.sql
+
+      - name: Verify worker_stats view present in schema
+        run: grep -q "create or replace view worker_stats" schema/template.sql
+
+      - name: Render example prompt templates
+        run: python tests/render_examples.py
+
+      - name: Smoke test (mocked end-to-end)
+        env:
+          SUPABASE_URL: http://localhost:54321
+          SUPABASE_SERVICE_ROLE_KEY: dummy
+          SUPABASE_DB_URL: postgresql://user:pass@localhost:5432/postgres
+        run: python tests/smoke.py
+
+      # NOTE: `python -m worker --status` is intentionally skipped in CI. It dials
+      # real PostgREST; wiring a MockTransport at subprocess boundary is not worth the
+      # complexity when tests/smoke.py already covers the same code path end-to-end.
+
+      - name: Lint with ruff
+        run: ruff check worker/ tests/
+
+      # Domain scrubs use external pattern files so the CI workflow itself doesn't
+      # trip the grep (patterns can't live inline in the step that invokes grep).
+      - name: Primary domain scrub (word-boundary aware)
+        run: |
+          ! grep -rnE -f .github/domain-scrub-primary.txt --exclude-dir=.git --exclude-dir=.github .
+
+      - name: Secondary domain scrub
+        run: |
+          ! grep -rniE -f .github/domain-scrub-secondary.txt --exclude-dir=.git --exclude-dir=.github .
+
+      - name: Git log scrub
+        run: |
+          ! git log --all --oneline | grep -iE -f .github/domain-scrub-gitlog.txt

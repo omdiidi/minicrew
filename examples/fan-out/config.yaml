@@ -1,0 +1,60 @@
+schema_version: 1
+
+db:
+  jobs_table: jobs
+  workers_table: workers
+  events_table: worker_events
+  url: ${SUPABASE_URL}
+  service_key: ${SUPABASE_SERVICE_ROLE_KEY}
+  direct_url: ${SUPABASE_DB_URL}
+
+worker:
+  prefix: minicrew
+  role: primary
+  poll_interval_seconds: null
+
+reaper:
+  stale_threshold_seconds: 120
+  interval_seconds: 60
+  max_attempts: 3
+
+job_types:
+  analyze_document_set:
+    description: "Split a document set into 3 groups, analyze each in parallel, merge results."
+    mode: fan_out
+    skill: null
+    model: claude-sonnet-4-6
+    thinking_budget: medium
+    timeout_seconds: 5400
+    prompt_template: group.md.j2
+    result_filename: result.json
+    idle_timeout_seconds: 1800
+    result_idle_timeout_seconds: 600
+    groups:
+      - name: first_third
+        prompt_template: group.md.j2
+        result_filename: group_result.json
+      - name: middle_third
+        prompt_template: group.md.j2
+        result_filename: group_result.json
+      - name: last_third
+        prompt_template: group.md.j2
+        result_filename: group_result.json
+    merge:
+      prompt_template: merge.md.j2
+      result_filename: result.json
+
+logging:
+  level: info
+  format: json
+  redact_env:
+    - SUPABASE_SERVICE_ROLE_KEY
+    - SUPABASE_DB_URL
+  sinks:
+    - type: file
+      path: logs/worker-{instance}.log
+      rotate: daily
+      keep: 30
+  job_output:
+    capture: true
+    retention_days: 7

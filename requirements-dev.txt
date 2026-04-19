@@ -1,0 +1,2 @@
+pglast>=6
+ruff>=0.6

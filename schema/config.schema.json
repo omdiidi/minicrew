@@ -1,0 +1,289 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "minicrew worker-config/config.yaml",
+  "description": "Schema for the consumer-supplied worker-config/config.yaml. The loader rejects unknown fields at every level. Any deviation from this schema is a hard fail on worker startup.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "db", "worker", "reaper", "job_types", "logging"],
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "description": "Config schema version. Must be 1 for this worker release. The loader rejects mismatched versions with a legible message."
+    },
+    "db": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Database connection settings. The worker talks to Supabase via PostgREST for most operations, and via a direct Postgres connection for the reaper's advisory lock.",
+      "required": ["jobs_table", "workers_table", "events_table", "url", "service_key", "direct_url"],
+      "properties": {
+        "jobs_table": {
+          "type": "string",
+          "description": "Name of the jobs table. Default 'jobs'. Must match the DDL in schema/template.sql."
+        },
+        "workers_table": {
+          "type": "string",
+          "description": "Name of the workers table. Default 'workers'."
+        },
+        "events_table": {
+          "type": "string",
+          "description": "Name of the worker_events table. Reserved for v2; unused in v1 but the name is validated so later upgrades do not break."
+        },
+        "url": {
+          "type": "string",
+          "description": "Supabase REST URL (https://<project>.supabase.co). Supports ${ENV_VAR} interpolation."
+        },
+        "service_key": {
+          "type": "string",
+          "description": "Supabase service role key. Required for the worker to bypass RLS. Supports ${ENV_VAR} interpolation; always redacted from logs."
+        },
+        "direct_url": {
+          "type": "string",
+          "description": "Direct Postgres URL on port 5432 (NOT the pooler on 6543). Required for pg_try_advisory_xact_lock. See docs/SUPABASE-SCHEMA.md for retrieval steps."
+        }
+      }
+    },
+    "worker": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Per-instance runtime settings.",
+      "required": ["prefix", "role"],
+      "properties": {
+        "prefix": {
+          "type": "string",
+          "description": "String prepended to the worker id. The full id is <prefix>-<hostname>-<instance>."
+        },
+        "role": {
+          "type": "string",
+          "enum": ["primary", "secondary"],
+          "description": "Priority tier. 'primary' polls every 5s; 'secondary' polls every 15s. A concrete poll_interval_seconds overrides this."
+        },
+        "poll_interval_seconds": {
+          "type": ["integer", "null"],
+          "description": "Optional explicit poll interval. If null, derived from role (primary=5, secondary=15)."
+        }
+      }
+    },
+    "reaper": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Opportunistic reaper settings. One worker at a time (chosen by advisory lock) requeues jobs from dead workers.",
+      "required": ["stale_threshold_seconds", "interval_seconds", "max_attempts"],
+      "properties": {
+        "stale_threshold_seconds": {
+          "type": "integer",
+          "minimum": 30,
+          "description": "A worker whose last_heartbeat is older than this many seconds is considered dead. Its jobs are requeued."
+        },
+        "interval_seconds": {
+          "type": "integer",
+          "minimum": 10,
+          "description": "How often the reaper thread wakes up."
+        },
+        "max_attempts": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Default max attempts for a job. A per-row jobs.max_attempts overrides this. Jobs transitioning past this threshold become 'failed_permanent'."
+        }
+      }
+    },
+    "job_types": {
+      "type": "object",
+      "description": "Map of job_type name to per-type configuration. Must contain at least one entry. Keys match lowercase_snake_case.",
+      "minProperties": 1,
+      "additionalProperties": false,
+      "patternProperties": {
+        "^[a-z0-9_]+$": {
+          "type": "object",
+          "description": "Configuration for one job type.",
+          "additionalProperties": false,
+          "required": ["mode", "model", "thinking_budget", "timeout_seconds", "prompt_template", "result_filename"],
+          "properties": {
+            "description": {
+              "type": "string",
+              "description": "Human-readable description of what this job type does."
+            },
+            "mode": {
+              "type": "string",
+              "enum": ["single", "fan_out"],
+              "description": "Orchestration mode. 'single' runs one Terminal session per job. 'fan_out' runs N group sessions in parallel plus one merge session."
+            },
+            "skill": {
+              "type": ["string", "null"],
+              "description": "Optional Claude Code skill invocation (e.g. 'my_plugin:summarize') prefixed to the rendered prompt."
+            },
+            "model": {
+              "type": "string",
+              "enum": ["claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5"],
+              "description": "Claude model identifier. Affects cost, latency, and quality. See docs/MODEL-TUNING.md."
+            },
+            "thinking_budget": {
+              "type": "string",
+              "enum": ["none", "medium", "high"],
+              "description": "Extended-thinking budget. 'none' disables; 'high' burns more tokens for harder reasoning."
+            },
+            "timeout_seconds": {
+              "type": "integer",
+              "description": "Hard cap on job wall-clock time. The Terminal session is torn down when exceeded."
+            },
+            "prompt_template": {
+              "type": "string",
+              "description": "Filename of the Jinja template under prompts/. The loader resolves it; not a path."
+            },
+            "result_filename": {
+              "type": "string",
+              "description": "Name of the result file the session is expected to produce. The watchdog polls for it; the engine reads it on completion."
+            },
+            "idle_timeout_seconds": {
+              "type": "integer",
+              "description": "No recursive file activity for this long AND no result file -> kill. Default 1500."
+            },
+            "result_idle_timeout_seconds": {
+              "type": "integer",
+              "description": "Result file exists but has not been modified in this long -> kill. Catches hung post-processing. Default 900."
+            },
+            "groups": {
+              "type": "array",
+              "description": "Fan-out mode only: parallel group definitions. Each group is its own Terminal session with its own prompt and result file.",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name", "prompt_template", "result_filename"],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "Group identifier. Becomes the subdirectory name group_<name> under the session cwd."
+                  },
+                  "prompt_template": {
+                    "type": "string",
+                    "description": "Filename of the Jinja template for this group. Resolved under prompts/."
+                  },
+                  "result_filename": {
+                    "type": "string",
+                    "description": "Name of the file this group's Claude session is expected to write."
+                  }
+                }
+              }
+            },
+            "merge": {
+              "type": "object",
+              "description": "Fan-out mode only: the merge step that runs after all groups complete.",
+              "additionalProperties": false,
+              "required": ["prompt_template", "result_filename"],
+              "properties": {
+                "prompt_template": {
+                  "type": "string",
+                  "description": "Filename of the Jinja template for the merge session. Resolved under prompts/."
+                },
+                "result_filename": {
+                  "type": "string",
+                  "description": "Final result filename produced by the merge session. Written into jobs.result."
+                }
+              }
+            }
+          },
+          "oneOf": [
+            {
+              "description": "single mode: no groups, no merge.",
+              "properties": {
+                "mode": {"const": "single"}
+              },
+              "not": {
+                "anyOf": [
+                  {"required": ["groups"]},
+                  {"required": ["merge"]}
+                ]
+              }
+            },
+            {
+              "description": "fan_out mode: groups (>=1) and merge both required.",
+              "properties": {
+                "mode": {"const": "fan_out"}
+              },
+              "required": ["groups", "merge"]
+            }
+          ]
+        }
+      }
+    },
+    "logging": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Logging configuration. v1 supports the file sink only; postgres and http sink types are reserved for v2.",
+      "required": ["level", "format", "redact_env", "sinks"],
+      "properties": {
+        "level": {
+          "type": "string",
+          "enum": ["debug", "info", "warn", "error"],
+          "description": "Log level threshold."
+        },
+        "format": {
+          "type": "string",
+          "enum": ["json"],
+          "description": "Log line format. Only 'json' is supported; structured logs are the only v1 format."
+        },
+        "redact_env": {
+          "type": "array",
+          "description": "Names of env vars whose values must be masked wherever they appear in logs. SUPABASE_SERVICE_ROLE_KEY and SUPABASE_DB_URL are always redacted regardless of this list.",
+          "items": {"type": "string"}
+        },
+        "sinks": {
+          "type": "array",
+          "description": "At least one sink is required. Each sink is an object with a 'type' discriminator.",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "description": "A log sink. In v1 the only permitted type is 'file'. Declaring 'postgres' or 'http' triggers a loader error pointing at the v2 roadmap.",
+            "oneOf": [
+              {
+                "description": "File sink: writes one JSON event per line to a rotating log file.",
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["type", "path", "rotate", "keep"],
+                "properties": {
+                  "type": {
+                    "const": "file",
+                    "description": "Must be 'file'. Other sink types are reserved for v2 and rejected at load time."
+                  },
+                  "path": {
+                    "type": "string",
+                    "description": "Log file path. Supports the {instance} placeholder."
+                  },
+                  "rotate": {
+                    "type": "string",
+                    "enum": ["daily", "hourly", "none"],
+                    "description": "Rotation cadence."
+                  },
+                  "keep": {
+                    "type": "integer",
+                    "description": "How many rotated files to keep."
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "job_output": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Settings for per-job stdout/stderr capture. Each Terminal session's output is tee'd to logs/jobs/<job-id>.log when capture is true.",
+          "required": ["capture", "retention_days"],
+          "properties": {
+            "capture": {
+              "type": "boolean",
+              "description": "Whether to capture per-job output."
+            },
+            "retention_days": {
+              "type": "integer",
+              "description": "How many days of per-job logs to retain on disk."
+            },
+            "upload_to_storage": {
+              "type": "boolean",
+              "description": "v2-reserved. Permitted in config for forward-compatibility but is a no-op in v1; setting it true does not upload anything."
+            }
+          }
+        }
+      }
+    }
+  }
+}

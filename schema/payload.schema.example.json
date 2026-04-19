@@ -1,0 +1,6 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "minicrew job payload",
+  "description": "Permissive default. Replace with a tighter schema when your job_types stabilize. If this file exists in your worker-config/, the engine validates every job's payload against it before launching Claude Code.",
+  "type": "object"
+}

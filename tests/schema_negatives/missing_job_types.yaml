@@ -1,0 +1,30 @@
+schema_version: 1
+
+db:
+  jobs_table: jobs
+  workers_table: workers
+  events_table: worker_events
+  url: https://example.supabase.co
+  service_key: dummy
+  direct_url: postgresql://user:pass@host:5432/postgres
+
+worker:
+  prefix: minicrew
+  role: primary
+  poll_interval_seconds: null
+
+reaper:
+  stale_threshold_seconds: 120
+  interval_seconds: 60
+  max_attempts: 3
+
+logging:
+  level: info
+  format: json
+  redact_env:
+    - SUPABASE_SERVICE_ROLE_KEY
+  sinks:
+    - type: file
+      path: logs/worker-{instance}.log
+      rotate: daily
+      keep: 30

@@ -1,0 +1,22 @@
+# minicrew
+
+> Generic Claude Code worker template for Mac Mini fleets. Queue-driven, zero-terminal setup.
+
+Entry points for AI agents:
+
+- [SETUP.md](./SETUP.md): Setting up a new worker machine (Mac Mini). Execute top-to-bottom.
+- [INTEGRATE.md](./INTEGRATE.md): Wiring a consumer project to use a minicrew worker. Self-contained.
+- [CLAUDE.md](./CLAUDE.md): Routing for Claude Code sessions landing in this repo.
+
+Deep-dive docs:
+
+- [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md): Runtime topology, engine internals.
+- [docs/CONFIG-REFERENCE.md](./docs/CONFIG-REFERENCE.md): Every config.yaml field.
+- [docs/SUPABASE-SCHEMA.md](./docs/SUPABASE-SCHEMA.md): Database schema + RLS guidance.
+- [docs/QUEUEING.md](./docs/QUEUEING.md): Priority, reaper, multi-machine.
+- [docs/ORCHESTRATION.md](./docs/ORCHESTRATION.md): Single vs fan-out modes.
+- [docs/MODEL-TUNING.md](./docs/MODEL-TUNING.md): Model + thinking-budget tradeoffs.
+- [docs/SKILLS-INTEGRATION.md](./docs/SKILLS-INTEGRATION.md): Globally-installed skills.
+- [docs/LOGGING.md](./docs/LOGGING.md): Sinks and retention.
+- [SECURITY.md](./SECURITY.md): Threat model, key rotation, hardened-mode.
+- [docs/TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md): Known failure modes.

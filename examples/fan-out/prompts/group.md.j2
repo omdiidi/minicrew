@@ -1,0 +1,24 @@
+You are one of three parallel workers analyzing a document set.
+
+Your assigned group: {{ group.name }}
+Your document indices in payload.documents: {{ group.document_indices | tojson }}
+
+Your task: for each document assigned to your group, produce a bullet summary and extract any named entities.
+
+The payload in full (for context):
+{{ payload | tojson }}
+
+Write your output to `group_result.json` in the current directory, with this shape:
+
+{
+  "group_name": "{{ group.name }}",
+  "documents": [
+    {
+      "index": <int>,
+      "summary_bullets": ["..."],
+      "entities": ["..."]
+    }
+  ]
+}
+
+This is an automated run. Do NOT ask clarifying questions.

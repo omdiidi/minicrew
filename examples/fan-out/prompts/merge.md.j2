@@ -1,0 +1,21 @@
+You are merging results from three parallel document-analysis groups.
+
+Group result files (read each and merge):
+{% for path in group_result_paths %}
+- {{ path }}
+{% endfor %}
+
+Your task: combine all per-document summaries into a single analysis with:
+1. A concatenated per-document summary list.
+2. A deduplicated entity set across all documents.
+3. An overall narrative summary (3-5 sentences) synthesizing the documents.
+
+Write to `result.json` with this shape:
+
+{
+  "per_document": [ ...flat list across all groups... ],
+  "entities_deduplicated": [ ... ],
+  "overall_summary": "..."
+}
+
+This is an automated run. Do NOT ask clarifying questions.

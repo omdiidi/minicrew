@@ -1,0 +1,104 @@
+"""Main poll loop — assembled from the rest of `core`. Called by cli.main()."""
+from __future__ import annotations
+
+import socket
+import threading
+import time
+from dataclasses import dataclass
+
+import worker.core.claim as claim
+import worker.core.heartbeat as heartbeat
+import worker.core.reaper as reaper
+import worker.core.signals as signals
+import worker.core.startup_recovery as startup_recovery
+import worker.core.state as state
+import worker.orchestration as orchestration
+from worker import __version__
+from worker.config.loader import load_config
+from worker.config.models import Config
+from worker.db.client import PostgrestClient
+from worker.db.queries import mark_worker_offline, requeue_job
+from worker.observability.events import (
+    JOB_CLAIMED,
+    POLL_LOOP_ERROR,
+    WORKER_STARTED,
+    WORKER_STOPPED,
+    emit,
+)
+from worker.observability.setup import setup as setup_observability
+from worker.utils.db_url import assert_db_url_is_direct
+
+
+@dataclass
+class RunOptions:
+    instance: int = 1
+    role: str | None = None
+    poll_interval: int | None = None
+    config_path: str | None = None
+
+
+def _resolve_poll_interval(cfg: Config, opts: RunOptions) -> int:
+    if opts.poll_interval is not None:
+        return opts.poll_interval
+    if cfg.worker.poll_interval_seconds is not None:
+        return cfg.worker.poll_interval_seconds
+    return 5 if cfg.worker.role == "primary" else 15
+
+
+def run(opts: RunOptions) -> int:
+    cfg = load_config(opts.config_path)
+    if opts.role:
+        cfg.worker.role = opts.role
+    assert_db_url_is_direct(cfg.db.direct_url)
+
+    worker_id = f"{cfg.worker.prefix}-{socket.gethostname()}-{opts.instance}"
+    setup_observability(cfg.logging, worker_id, opts.instance)
+    emit(WORKER_STARTED, version=__version__, role=cfg.worker.role, instance=opts.instance)
+
+    signals.install()
+
+    client = PostgrestClient(cfg.db.url, cfg.db.service_key)
+    try:
+        heartbeat.start(client, cfg, worker_id, opts.instance, __version__)
+
+        reaper_stop = threading.Event()
+        reaper_t = threading.Thread(
+            target=reaper.reaper_thread,
+            args=(cfg, reaper_stop),
+            name="minicrew-reaper",
+            daemon=True,
+        )
+        reaper_t.start()
+
+        startup_recovery.requeue_own_jobs(client, cfg, worker_id)
+
+        poll_interval = _resolve_poll_interval(cfg, opts)
+
+        while not state.shutdown_requested:
+            try:
+                job = claim.next_job(client, cfg, worker_id, __version__)
+                if job is None:
+                    time.sleep(poll_interval)
+                    continue
+                if state.shutdown_requested:
+                    requeue_job(client, cfg, job["id"], reason=f"worker {worker_id} shutting down")
+                    break
+                emit(JOB_CLAIMED, job_id=job["id"], job_type=job.get("job_type"))
+                state.set_current_job(job["id"])
+                try:
+                    orchestration.run(client, cfg, job)
+                finally:
+                    state.set_current_job(None)
+            except Exception as e:
+                emit(POLL_LOOP_ERROR, error=str(e))
+                time.sleep(poll_interval)
+
+        reaper_stop.set()
+        try:
+            mark_worker_offline(client, cfg, worker_id)
+        except Exception as e:
+            emit(POLL_LOOP_ERROR, error=f"mark_worker_offline failed: {e}")
+        emit(WORKER_STOPPED)
+        return 0
+    finally:
+        client.close()

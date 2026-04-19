@@ -1,0 +1,16 @@
+You are processing a minicrew job. The job payload is below.
+
+Your task: produce a concise summary (3-5 sentences) of the input text.
+
+Input text:
+{{ payload.text | tojson }}
+
+Write your summary to a file named `result.json` in the current directory, with this shape:
+
+{
+  "summary": "<your summary>",
+  "word_count_input": {{ payload.text | length }},
+  "model_notes": "<any caveats, or empty string>"
+}
+
+This is an automated run. Do NOT ask clarifying questions. Proceed with best judgment.
