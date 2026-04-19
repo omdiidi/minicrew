@@ -48,7 +48,7 @@ create table jobs (
   completed_at timestamptz,
   expires_at timestamptz,
   attempt_count int not null default 0,
-  max_attempts int not null default 3,
+  max_attempts int,
   -- RESERVED for v2 routing; engine does not filter on `requires` in v1.
   requires jsonb not null default '[]'::jsonb,
   payload jsonb not null default '{}'::jsonb,

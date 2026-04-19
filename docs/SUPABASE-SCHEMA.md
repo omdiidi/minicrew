@@ -190,9 +190,12 @@ alter table worker_events  enable row level security;
 create policy jobs_service_all on jobs
   for all to service_role using (true) with check (true);
 
--- jobs: your backend role can insert and read its own rows. Adjust role name.
+-- jobs: your backend role can insert rows attributed to itself, and read those rows back.
+-- Adjust the role name to match the role your consumer backend authenticates as.
+-- The `enqueued_by` match keeps the audit trail meaningful and prevents spoofing.
 create policy jobs_backend_insert on jobs
-  for insert to authenticated with check (auth.role() = 'authenticated');
+  for insert to authenticated
+  with check (enqueued_by = auth.uid()::text);
 create policy jobs_backend_select on jobs
   for select to authenticated using (enqueued_by = auth.uid()::text);
 

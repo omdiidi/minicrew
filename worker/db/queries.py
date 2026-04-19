@@ -175,7 +175,7 @@ def requeue_job(
     per_row_max = rows[0].get("max_attempts")
     effective_max = int(per_row_max) if per_row_max is not None else int(cfg.reaper.max_attempts)
     next_attempt = current + 1
-    if next_attempt > effective_max:
+    if next_attempt >= effective_max:
         patched = client.patch(
             cfg.db.jobs_table,
             {

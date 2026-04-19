@@ -1,6 +1,6 @@
-plan2bid
-estimation
-\btrade\b
-construction
-\bbid\b
-\bcontractor\b
+p[l]an2bid
+estim[a]tion
+\btra[d]e\b
+construc[t]ion
+\bb[i]d\b
+\bcontrac[t]or\b

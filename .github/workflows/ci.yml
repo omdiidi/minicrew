@@ -68,16 +68,19 @@ jobs:
       - name: Lint with ruff
         run: ruff check worker/ tests/
 
-      # Domain scrubs use external pattern files under ci/ so the workflow itself
-      # doesn't trip the grep (patterns can't live inline in the step that invokes grep).
+      # Domain scrubs use pattern files under ci/. Patterns use regex character classes
+      # (e.g. p[l]an2bid) so the pattern files do not self-match when the scrub runs over
+      # the whole tree — we no longer need --exclude-dir=ci.
       - name: Primary domain scrub (word-boundary aware)
         run: |
-          ! grep -rnE -f ci/domain-scrub-primary.txt --exclude-dir=.git --exclude-dir=ci --exclude-dir=.venv --exclude-dir=logs .
+          ! grep -rnE -f ci/domain-scrub-primary.txt --exclude-dir=.git --exclude-dir=.venv --exclude-dir=logs --exclude-dir=__pycache__ .
 
       - name: Secondary domain scrub
         run: |
-          ! grep -rniE -f ci/domain-scrub-secondary.txt --exclude-dir=.git --exclude-dir=ci --exclude-dir=.venv --exclude-dir=logs .
+          ! grep -rniE -f ci/domain-scrub-secondary.txt --exclude-dir=.git --exclude-dir=.venv --exclude-dir=logs --exclude-dir=__pycache__ .
 
-      - name: Git log scrub
+      # Subject-line scrub only. Commit bodies legitimately describe the scrub itself;
+      # subjects stay neutral by convention.
+      - name: Git log scrub (subject lines)
         run: |
           ! git log --all --oneline | grep -iE -f ci/domain-scrub-gitlog.txt
