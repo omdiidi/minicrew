@@ -22,7 +22,8 @@ This is minicrew's security contract. Any change here requires thinking about th
 ## Secrets handling
 
 - Secrets live in `.env` only. `.env` is in `.gitignore`. `.env.example` is the committed template with placeholders.
-- `chmod 600 .env` is set by `SETUP.md` step 3. Do not loosen it.
+- `chmod 600 .env` is set by `SETUP.md` step 3 AND re-asserted by `setup.sh` and `worker/utils/launchd.py install` on every run. Do not loosen it.
+- The launchd plist at `~/Library/LaunchAgents/com.minicrew.worker.N.plist` does **not** carry secrets. It contains only `MINICREW_CONFIG_PATH` and `PATH`. The worker process loads `.env` itself at startup via `python-dotenv`. This keeps credentials out of the plist file (which lives in a directory without tight permissions) and out of `launchctl print` output.
 - Secrets never appear in log events. The observability layer's JSON formatter runs every event through a redaction filter before writing.
 - Redaction list (always redacted, cannot be disabled): `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_DB_URL`. Consumers may add additional names via `logging.redact_env` in `config.yaml`.
 
@@ -36,12 +37,12 @@ Rotate the Supabase service role key if it was exposed (session export, shared t
    # Edit .env in place; set SUPABASE_SERVICE_ROLE_KEY=<new key>
    chmod 600 .env
 
-   # Restart every worker instance so it picks up the new env
+   # Restart every worker instance — each worker re-reads .env on startup via python-dotenv.
+   # Plist regeneration is NOT required: the plist does not carry secrets.
    for i in 1 2 3 4 5; do
      launchctl kickstart -k gui/$(id -u)/com.minicrew.worker.$i 2>/dev/null || true
    done
    ```
-   Equivalently, `bash teardown.sh && bash setup.sh` re-installs launchd with the new `.env`.
 3. Confirm with `.venv/bin/python -m worker --status` on each machine; the fleet should be healthy within one poll interval.
 4. Revoke the old key in the Supabase Dashboard (the rotation above replaces it; confirm it no longer authenticates with a manual curl against PostgREST).
 

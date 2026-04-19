@@ -90,7 +90,7 @@ The work queue. Consumers insert rows; the engine claims and updates them.
 | `completed_at`    | timestamptz   | Set on completion, error, or cancellation.                                                   |
 | `expires_at`      | timestamptz   | Optional deadline. Jobs past this are cancelled on claim attempt.                            |
 | `attempt_count`   | int           | Incremented by the reaper on requeue.                                                        |
-| `max_attempts`    | int           | Per-row override. Falls back to `cfg.reaper.max_attempts` via `coalesce` inside the RPC.     |
+| `max_attempts`    | int (nullable)| Per-row override. When NULL (default), the reaper uses `cfg.reaper.max_attempts` from the worker's config via `coalesce`. Set explicitly on a row only when you want to override the global default for that specific job. |
 | `requires`        | jsonb         | **v2 reserved.** No v1 filter.                                                               |
 | `payload`         | jsonb         | Consumer-shaped input. Validated against `payload.schema.json` if present.                    |
 | `result`          | jsonb         | Engine writes the final result document here.                                                |
@@ -146,7 +146,7 @@ Called exclusively by the reaper thread, inside the advisory-lock transaction. T
 
 1. Selects all `running` jobs owned by that worker.
 2. Increments `attempt_count`.
-3. Transitions each to `pending` unless `attempt_count >= coalesce(max_attempts, p_default_max)`, in which case `failed_permanent` and a descriptive `error_message` are written.
+3. Transitions each to `pending` unless the next attempt would exceed `coalesce(max_attempts, p_default_max)`, in which case `failed_permanent` and a descriptive `error_message` are written. `max_attempts` is the total number of attempts allowed before poison-pill: with `max_attempts=3`, `attempt_count` can reach 3 (three attempts total); the fourth claim cycle triggers the poison transition.
 4. Clears `worker_id`, `claimed_at`, and `started_at`.
 5. Returns the number of rows requeued.
 

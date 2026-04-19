@@ -5,9 +5,11 @@ with every domain reference stripped.
 """
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -24,7 +26,7 @@ from worker.terminal.watchdog import (
     RESULT_SHUTDOWN,
     wait_for_completion,
 )
-from worker.utils.paths import repo_root
+from worker.utils.paths import repo_root, tmp_root
 
 if TYPE_CHECKING:
     from worker.config.models import Config, GroupSpec, JobType
@@ -147,7 +149,7 @@ def run_fan_out(client, cfg: Config, job: dict, job_type: JobType, *, worker_id:
     assert job_type.merge is not None
     job_id = job["id"]
     started = time.time()
-    tmpdir = Path(tempfile.mkdtemp(prefix="minicrew_fanout_", dir="/tmp"))
+    tmpdir = Path(tempfile.mkdtemp(prefix="minicrew_fanout_", dir=str(tmp_root())))
     merge_window: int | None = None
     try:
         payload = job.get("payload") or {}
@@ -155,6 +157,7 @@ def run_fan_out(client, cfg: Config, job: dict, job_type: JobType, *, worker_id:
         splits = _split_document_indices(payload, len(job_type.groups))
 
         group_dirs: list[tuple[GroupSpec, Path, list[int]]] = []
+        missing_groups: list[str] = []
         launched_any = False
         for group, doc_indices in zip(job_type.groups, splits, strict=False):
             group_dir = tmpdir / f"group_{group.name}"
@@ -164,7 +167,9 @@ def run_fan_out(client, cfg: Config, job: dict, job_type: JobType, *, worker_id:
             try:
                 window_id = _launch_group_session(group_dir, prompt, job_type, log_path)
             except LaunchError as e:
+                # F8: launch failure must land in missing_groups so the merge template sees it.
                 emit(JOB_FAILED, job_id=job_id, reason="group_launch_error", group=group.name, error=str(e))
+                missing_groups.append(group.name)
                 continue
             if not launched_any:
                 # C8: write started_at only after the FIRST successful group launch.
@@ -188,37 +193,83 @@ def run_fan_out(client, cfg: Config, job: dict, job_type: JobType, *, worker_id:
             emit(JOB_FAILED, job_id=job_id, mode="fan_out", reason="no_group_launched")
             return
 
-        # I9: per-group watchdog using job_type's configured idle timeouts, not a hardcoded constant.
-        # Each group gets its own wait_for_completion on its own cwd + result filename.
-        # overall_timeout_seconds is the job_type's timeout_seconds; we also honor shutdown mid-wait.
-        missing_groups: list[str] = []
-        completed_paths: list[str] = []
-        for group, group_dir, _indices in group_dirs:
-            # Read window_id back from disk (it was written at launch).
-            try:
-                wid = int((group_dir / "_window_id.txt").read_text().strip())
-            except (OSError, ValueError):
-                wid = 0
+        # F3: run every group's watchdog in its own thread so a late group can't run
+        # unmonitored while an earlier group is still being waited on sequentially.
+        results: dict[str, str] = {}
+        threads: list[threading.Thread] = []
+
+        def _watch_group(gname: str, gdir: Path, gfilename: str, gwid: int) -> None:
             outcome = wait_for_completion(
-                cwd=group_dir,
-                window_id=wid,
-                result_filename=group.result_filename,
+                cwd=gdir,
+                window_id=gwid,
+                result_filename=gfilename,
                 overall_timeout_seconds=job_type.timeout_seconds,
                 idle_timeout_seconds=job_type.idle_timeout_seconds,
                 result_idle_timeout_seconds=job_type.result_idle_timeout_seconds,
             )
-            if state.shutdown_requested:
-                # Shutdown wins; clean up and requeue.
-                for wid2 in _read_window_ids(tmpdir):
-                    exit_claude_and_close_window(wid2)
-                requeue_job(client, cfg, job_id, reason="worker shutting down during fan_out")
-                return
-            if outcome == RESULT_COMPLETED:
-                result_path = (group_dir / group.result_filename).resolve()
-                completed_paths.append(str(result_path))
-            else:
+            results[gname] = outcome
+
+        for group, group_dir, _indices in group_dirs:
+            try:
+                wid = int((group_dir / "_window_id.txt").read_text().strip())
+            except (OSError, ValueError):
+                wid = 0
+            t = threading.Thread(
+                target=_watch_group,
+                args=(group.name, group_dir, group.result_filename, wid),
+                name=f"minicrew-group-{group.name}",
+                daemon=True,
+            )
+            t.start()
+            threads.append(t)
+
+        for t in threads:
+            t.join()
+
+        if state.shutdown_requested:
+            # Shutdown wins; clean up and requeue.
+            for wid2 in _read_window_ids(tmpdir):
+                exit_claude_and_close_window(wid2)
+            requeue_job(client, cfg, job_id, worker_id, reason="worker shutting down during fan_out")
+            return
+
+        # F4: read each completed group's result file through read_result_safe (O_NOFOLLOW +
+        # containment check). Write the sanitized contents to a parallel _safe file inside the
+        # same group dir so the merge prompt references a vetted artifact instead of the raw
+        # result path. Groups that fail the safety check land in missing_groups.
+        completed_paths: list[str] = []
+        for group, group_dir, _indices in group_dirs:
+            outcome = results.get(group.name, RESULT_COMPLETED if group.name in results else "missing")
+            if outcome != RESULT_COMPLETED:
                 missing_groups.append(group.name)
                 emit(JOB_FAILED, job_id=job_id, mode="fan_out_group", group=group.name, reason=outcome)
+                continue
+            group_result = read_result_safe(group_dir, group.result_filename)
+            if group_result is None:
+                missing_groups.append(group.name)
+                emit(
+                    JOB_FAILED,
+                    job_id=job_id,
+                    mode="fan_out_group",
+                    group=group.name,
+                    reason="group_result_read_failed",
+                )
+                continue
+            safe_path = group_dir / f"_safe_{group.result_filename}"
+            try:
+                safe_path.write_text(json.dumps(group_result), encoding="utf-8")
+            except OSError as e:
+                missing_groups.append(group.name)
+                emit(
+                    JOB_FAILED,
+                    job_id=job_id,
+                    mode="fan_out_group",
+                    group=group.name,
+                    reason="safe_write_failed",
+                    error=str(e),
+                )
+                continue
+            completed_paths.append(str(safe_path.resolve()))
 
         if not completed_paths:
             update_job_status(
@@ -257,7 +308,7 @@ def run_fan_out(client, cfg: Config, job: dict, job_type: JobType, *, worker_id:
         merge_window = None
 
         if outcome == RESULT_SHUTDOWN:
-            requeue_job(client, cfg, job_id, reason="worker shutting down during merge")
+            requeue_job(client, cfg, job_id, worker_id, reason="worker shutting down during merge")
             return
 
         if outcome == RESULT_COMPLETED:

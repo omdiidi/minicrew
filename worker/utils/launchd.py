@@ -3,20 +3,15 @@ from __future__ import annotations
 
 import argparse
 import os
+import stat
 import subprocess
 import sys
 import time
 from pathlib import Path
 from xml.sax.saxutils import escape
 
-from dotenv import dotenv_values
-
 # Baseline PATH for the launchd environment — matches what a login shell sees for Homebrew + system bins.
 STANDARD_PATH = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-
-# Env vars loaded from .env that must be forwarded into the launchd plist so the
-# worker process sees Supabase credentials when it starts under launchd.
-_FORWARDED_ENV_KEYS = ("SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_DB_URL")
 
 
 def _label(instance: int) -> str:
@@ -64,6 +59,15 @@ def render_plist(
 """
 
 
+def _ensure_env_locked_down(env_path: Path) -> None:
+    """F2: ensure `.env` is `0600` so only the owner can read Supabase credentials."""
+    try:
+        env_path.chmod(stat.S_IRUSR | stat.S_IWUSR)
+    except OSError:
+        # Best-effort; some filesystems (network mounts) reject chmod. Don't block install.
+        pass
+
+
 def install(
     *,
     instance: int,
@@ -73,44 +77,46 @@ def install(
     python: Path,
     worker_pkg_root: Path,
     log_dir: Path,
+    replace_existing: bool = False,
 ) -> None:
     label = _label(instance)
     plist_path = _plist_path(instance)
     uid = os.getuid()
 
-    # Collision check (I12): refuse to silently replace an existing install. The top-level
-    # retry-on-race logic below handles the `already loaded` case inside this invocation;
-    # here we fail loudly when the caller thinks they're installing a fresh instance.
-    if plist_path.exists():
-        raise RuntimeError(
-            f"Instance {instance} is already installed at {plist_path}. "
-            "Run `bash teardown.sh` or `/minicrew:teardown` first, or pick a different instance number."
+    # F9: when replace_existing is False, refuse to clobber an existing install. When
+    # True (setup.sh idempotent re-run), fall through and let the bootout+retry loop
+    # below handle the transition.
+    if not replace_existing:
+        if plist_path.exists():
+            raise RuntimeError(
+                f"Instance {instance} is already installed at {plist_path}. "
+                "Run `bash teardown.sh` or `/minicrew:teardown` first, or pick a different instance number."
+            )
+        probe = subprocess.run(
+            ["launchctl", "list"], capture_output=True, text=True, check=False
         )
-    probe = subprocess.run(
-        ["launchctl", "list"], capture_output=True, text=True, check=False
-    )
-    if probe.returncode == 0 and label in (probe.stdout or ""):
-        raise RuntimeError(
-            f"Instance {instance} label {label} is already loaded in launchctl. "
-            "Run `bash teardown.sh` or `/minicrew:teardown` first, or pick a different instance number."
-        )
+        if probe.returncode == 0 and label in (probe.stdout or ""):
+            raise RuntimeError(
+                f"Instance {instance} label {label} is already loaded in launchctl. "
+                "Run `bash teardown.sh` or `/minicrew:teardown` first, or pick a different instance number."
+            )
 
-    # Load Supabase credentials from .env at the repo root (worker_pkg_root).
+    # F2: require `.env` to exist at repo root — the worker process loads it at startup.
+    # The plist no longer carries Supabase secrets, so `.env` is the sole secret store.
     env_path = worker_pkg_root / ".env"
     if not env_path.exists():
         raise RuntimeError(
             f"Required .env not found at {env_path}. Run the steps in SETUP.md first to create it."
         )
-    env_values = dotenv_values(env_path)
+    _ensure_env_locked_down(env_path)
 
+    # F2: plist carries ONLY non-secret env — MINICREW_CONFIG_PATH locates the consumer
+    # config dir, PATH lets the worker find `claude` and system binaries. Supabase
+    # credentials stay in `.env` and are loaded by the worker process at startup.
     plist_env = {
         "MINICREW_CONFIG_PATH": str(config_path),
         "PATH": STANDARD_PATH,
     }
-    for key in _FORWARDED_ENV_KEYS:
-        val = env_values.get(key)
-        if val:
-            plist_env[key] = val
 
     args = [str(python), "-m", "worker", "--instance", str(instance), "--role", role]
     if poll_interval:
@@ -127,6 +133,15 @@ def install(
         env=plist_env,
     )
     plist_path.parent.mkdir(parents=True, exist_ok=True)
+    # F9: when replacing an existing install, proactively bootout the old label so the
+    # new plist-write + bootstrap sees a clean slate.
+    if replace_existing:
+        subprocess.run(
+            ["launchctl", "bootout", f"gui/{uid}/{label}"],
+            check=False,
+            capture_output=True,
+        )
+        time.sleep(0.5)
     plist_path.write_text(plist_xml)
     for _attempt in range(3):
         res = subprocess.run(
@@ -168,6 +183,11 @@ def _main(argv: list[str] | None = None) -> int:
     p_install.add_argument("--python", type=Path, default=Path(sys.executable))
     p_install.add_argument("--worker-root", type=Path, default=None)
     p_install.add_argument("--log-dir", type=Path, default=None)
+    p_install.add_argument(
+        "--replace-existing",
+        action="store_true",
+        help="Replace any existing install for this instance (idempotent re-run).",
+    )
 
     p_uninstall = sub.add_parser("uninstall", help="Uninstall launchd service for one instance")
     p_uninstall.add_argument("--instance", type=int, required=True)
@@ -184,6 +204,7 @@ def _main(argv: list[str] | None = None) -> int:
             python=args.python,
             worker_pkg_root=worker_root,
             log_dir=log_dir,
+            replace_existing=args.replace_existing,
         )
         return 0
     if args.cmd == "uninstall":

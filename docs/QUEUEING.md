@@ -47,10 +47,11 @@ same lock. Exactly one worker gets `true` back; every other worker gets `false` 
 to sleep. The winner queries `workers` for rows with `last_heartbeat` older than the stale
 threshold (default 120 seconds), marks those workers `status='offline'`, and calls the
 `requeue_stale_jobs_for_worker` RPC for each. The RPC increments `attempt_count` and
-transitions the job back to `pending` — unless `attempt_count` has hit `max_attempts`, in which
-case the job moves to `failed_permanent` with a descriptive error message. This is the
-poison-pill protection: a job that crashes three workers in a row is frozen for human review
-rather than cycling forever.
+transitions the job back to `pending` — unless the next attempt would exceed `max_attempts`, in
+which case the job moves to `failed_permanent` with a descriptive error message. `max_attempts`
+is the total number of attempts allowed before poison-pill, so `max_attempts=3` permits three
+attempts in total and poisons on the fourth claim cycle. This is the poison-pill protection: a
+job that crashes its retry budget is frozen for human review rather than cycling forever.
 
 ## Pooler vs direct connection
 

@@ -36,8 +36,10 @@ The next worker to claim it transitions the row to `status='running'` with a sta
 session, `started_at` is written. On completion, the worker writes `result` (JSONB) and sets
 `status='completed'` with `completed_at`. On failure, `status='error'` and `error_message` are
 set. If the worker dies or the idle watchdog kills the session, the reaper (or startup recovery
-on the next boot) requeues the row back to `pending` and increments `attempt_count`; past
-`max_attempts` the row becomes `failed_permanent` with a descriptive `error_message`.
+on the next boot) requeues the row back to `pending` and increments `attempt_count`; once the
+retry budget is exhausted (`max_attempts` is the total number of attempts allowed, so
+`max_attempts=3` poisons on the fourth claim cycle) the row becomes `failed_permanent` with a
+descriptive `error_message`.
 
 ## Atomic claim
 

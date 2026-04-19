@@ -90,10 +90,15 @@ def launch_terminal_window(cwd: Path) -> int:
     if not runner.exists():
         raise LaunchError(f"_run.sh missing at {runner}")
     runner.chmod(0o755)
+    # F10: defense-in-depth — escape backslash and double-quote in the runner path before
+    # interpolating into the AppleScript literal. Current callers produce random tempdir
+    # paths, but an attacker who influences the path shouldn't be able to break out of the
+    # "do script" string.
+    runner_escaped = str(runner).replace("\\", "\\\\").replace('"', '\\"')
     # `; exit 0` makes the shell exit once Claude exits, so the window enters "Process completed".
     script = (
         'tell application "Terminal"\n'
-        f'    set t to do script "bash \\"{runner}\\"; exit 0"\n'
+        f'    set t to do script "bash \\"{runner_escaped}\\"; exit 0"\n'
         "    return id of window 1 whose tabs contains t\n"
         "end tell\n"
     )

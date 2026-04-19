@@ -144,28 +144,39 @@ def requeue_job(
     client: PostgrestClient,
     cfg: Config,
     job_id: str,
+    worker_id: str,
     reason: str,
 ) -> None:
     """Requeue a running job, incrementing attempt_count and honoring max_attempts.
 
-    Mirrors the reaper's poison-pill logic so startup-recovery retries count toward
-    the job's retry budget. TODO: collapse into a single RPC call once the reaper
-    RPC grows to accept a caller-supplied reason.
+    Ownership-gated: every read and every PATCH is filtered by `id + worker_id` so a
+    stale worker (whose job has already been requeued by the reaper and re-claimed by
+    another worker) cannot overwrite or bump attempt_count on a job it no longer owns.
+
+    Mirrors the reaper's poison-pill logic so shutdown-triggered retries count toward
+    the job's retry budget.
     """
     rows = client.get(
         cfg.db.jobs_table,
         id=job_id,
+        worker_id=worker_id,
         select="attempt_count,max_attempts",
         limit="1",
     )
     if not rows:
+        emit(
+            POLL_LOOP_ERROR,
+            error="requeue_job: row no longer owned by this worker; skipping",
+            job_id=job_id,
+            worker_id=worker_id,
+        )
         return
     current = int(rows[0].get("attempt_count") or 0)
     per_row_max = rows[0].get("max_attempts")
     effective_max = int(per_row_max) if per_row_max is not None else int(cfg.reaper.max_attempts)
     next_attempt = current + 1
     if next_attempt > effective_max:
-        client.patch(
+        patched = client.patch(
             cfg.db.jobs_table,
             {
                 "status": "failed_permanent",
@@ -179,9 +190,10 @@ def requeue_job(
                 )[:2000],
             },
             id=job_id,
+            worker_id=worker_id,
         )
     else:
-        client.patch(
+        patched = client.patch(
             cfg.db.jobs_table,
             {
                 "status": "pending",
@@ -192,6 +204,14 @@ def requeue_job(
                 "error_message": reason[:2000],
             },
             id=job_id,
+            worker_id=worker_id,
+        )
+    if not patched:
+        emit(
+            POLL_LOOP_ERROR,
+            error="requeue_job: conditional patch wrote no rows (worker lost ownership mid-requeue)",
+            job_id=job_id,
+            worker_id=worker_id,
         )
 
 

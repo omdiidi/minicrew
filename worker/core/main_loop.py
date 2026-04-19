@@ -6,6 +6,8 @@ import threading
 import time
 from dataclasses import dataclass
 
+from dotenv import load_dotenv
+
 import worker.core.claim as claim
 import worker.core.heartbeat as heartbeat
 import worker.core.reaper as reaper
@@ -27,6 +29,7 @@ from worker.observability.events import (
 )
 from worker.observability.setup import setup as setup_observability
 from worker.utils.db_url import assert_db_url_is_direct
+from worker.utils.paths import repo_root
 
 
 @dataclass
@@ -46,6 +49,13 @@ def _resolve_poll_interval(cfg: Config, opts: RunOptions) -> int:
 
 
 def run(opts: RunOptions) -> int:
+    # F2: load .env at process start so SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY /
+    # SUPABASE_DB_URL are available to load_config() without the launchd plist
+    # carrying them. The plist now only sets MINICREW_CONFIG_PATH + PATH.
+    env_path = repo_root() / ".env"
+    if env_path.exists():
+        load_dotenv(env_path, override=False)
+
     cfg = load_config(opts.config_path)
     if opts.role:
         cfg.worker.role = opts.role
@@ -81,7 +91,7 @@ def run(opts: RunOptions) -> int:
                     time.sleep(poll_interval)
                     continue
                 if state.shutdown_requested:
-                    requeue_job(client, cfg, job["id"], reason=f"worker {worker_id} shutting down")
+                    requeue_job(client, cfg, job["id"], worker_id, reason=f"worker {worker_id} shutting down")
                     break
                 emit(JOB_CLAIMED, job_id=job["id"], job_type=job.get("job_type"))
                 state.set_current_job(job["id"])

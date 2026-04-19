@@ -19,7 +19,10 @@ create table jobs (
   completed_at timestamptz,
   expires_at timestamptz,
   attempt_count int not null default 0,
-  max_attempts int not null default 3,
+  -- Nullable per-row override. When NULL, the reaper's `coalesce(max_attempts, p_default_max)`
+  -- falls back to cfg.reaper.max_attempts from the worker config. Set explicitly on a job row
+  -- only when you want to override the global default for that specific job.
+  max_attempts int,
   -- RESERVED for v2 routing; engine does not filter on `requires` in v1.
   requires jsonb not null default '[]'::jsonb,
   payload jsonb not null default '{}'::jsonb,
