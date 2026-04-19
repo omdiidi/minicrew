@@ -82,10 +82,22 @@ class Config:
     # Values that came from redact_env-listed env vars — never emitted to Jinja.
     _secrets: set[str] = field(default_factory=set)
 
-    def public_view(self) -> dict[str, Any]:
-        """Dict safe to expose inside Jinja templates (excludes secrets)."""
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize the full config (including every DB field) into a plain dict.
+
+        Used as the starting point for `public_view`, which then redacts any leaf value
+        present in `_secrets`.
+        """
         return {
             "schema_version": self.schema_version,
+            "db": {
+                "jobs_table": self.db.jobs_table,
+                "workers_table": self.db.workers_table,
+                "events_table": self.db.events_table,
+                "url": self.db.url,
+                "service_key": self.db.service_key,
+                "direct_url": self.db.direct_url,
+            },
             "worker": {
                 "prefix": self.worker.prefix,
                 "role": self.worker.role,
@@ -97,4 +109,26 @@ class Config:
                 "max_attempts": self.reaper.max_attempts,
             },
             "job_types": {k: {"mode": v.mode, "model": v.model} for k, v in self.job_types.items()},
+            "logging": {
+                "level": self.logging.level,
+                "format": self.logging.format,
+                "redact_env": list(self.logging.redact_env),
+            },
         }
+
+    def public_view(self) -> dict[str, Any]:
+        """Dict safe to expose inside Jinja templates: every leaf value matching a known
+        secret (from `_secrets`, populated by the loader) is replaced with `***`.
+        """
+        secrets = self._secrets
+
+        def scrub(value: Any) -> Any:
+            if isinstance(value, dict):
+                return {k: scrub(v) for k, v in value.items()}
+            if isinstance(value, list):
+                return [scrub(v) for v in value]
+            if isinstance(value, str) and value in secrets:
+                return "***"
+            return value
+
+        return scrub(self.to_dict())

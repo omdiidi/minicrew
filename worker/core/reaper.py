@@ -7,6 +7,7 @@ writes from another reaper.
 from __future__ import annotations
 
 import threading
+import time
 from typing import TYPE_CHECKING
 
 import psycopg
@@ -19,8 +20,12 @@ if TYPE_CHECKING:
     from worker.config.models import Config
 
 
-def run_one_cycle(cfg: Config, conn: psycopg.Connection) -> None:
-    """Find stale workers, mark them offline, call the requeue RPC for each."""
+def run_one_cycle(cfg: Config, conn: psycopg.Connection) -> int:
+    """Find stale workers, mark them offline, call the requeue RPC for each.
+
+    Returns the total number of jobs requeued in this cycle so the caller can emit it.
+    """
+    total_requeued = 0
     with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(
             """
@@ -40,7 +45,9 @@ def run_one_cycle(cfg: Config, conn: psycopg.Connection) -> None:
             )
             row = cur.fetchone()
             count = row["requeue_stale_jobs_for_worker"] if row else 0
+            total_requeued += count or 0
             emit(REAPER_REQUEUED, worker_id=wid, count=count)
+    return total_requeued
 
 
 def reaper_thread(cfg: Config, stop_event: threading.Event) -> None:
@@ -51,8 +58,13 @@ def reaper_thread(cfg: Config, stop_event: threading.Event) -> None:
                     # Another worker holds the lock this cycle; just wait.
                     stop_event.wait(cfg.reaper.interval_seconds)
                     continue
-                run_one_cycle(cfg, conn)
-                emit(REAPER_RAN)
+                start = time.time()
+                count_requeued = run_one_cycle(cfg, conn)
+                emit(
+                    REAPER_RAN,
+                    count_requeued=count_requeued,
+                    duration_seconds=round(time.time() - start, 3),
+                )
         except Exception as e:
             emit(REAPER_ERROR, error=str(e))
         stop_event.wait(cfg.reaper.interval_seconds)

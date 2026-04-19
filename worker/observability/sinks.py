@@ -8,16 +8,24 @@ from typing import Any
 
 
 class FileSink:
-    """Wraps a TimedRotatingFileHandler so sink setup is uniform across types."""
+    """Wraps a TimedRotatingFileHandler so sink setup is uniform across types.
+
+    `rotate="none"` yields a plain FileHandler with no rotation; `daily`/`hourly` yield
+    a TimedRotatingFileHandler with the matching cadence.
+    """
 
     def __init__(self, *, path: str, rotate: str, keep: int, instance: int) -> None:
         resolved = Path(path.format(instance=instance))
         resolved.parent.mkdir(parents=True, exist_ok=True)
-        when = {"daily": "D", "hourly": "H", "none": "D"}.get(rotate, "D")
-        # `when='D'` with backupCount handles daily rotation + retention.
-        self.handler = TimedRotatingFileHandler(
-            resolved, when=when, backupCount=keep, encoding="utf-8", utc=True
-        )
+        if rotate == "none":
+            self.handler: logging.Handler = logging.FileHandler(
+                resolved, encoding="utf-8"
+            )
+        else:
+            when = {"daily": "D", "hourly": "H"}.get(rotate, "D")
+            self.handler = TimedRotatingFileHandler(
+                resolved, when=when, backupCount=keep, encoding="utf-8", utc=True
+            )
 
     def as_handler(self) -> logging.Handler:
         return self.handler

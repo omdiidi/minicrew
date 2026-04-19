@@ -121,8 +121,15 @@ plus a merge subdirectory:
 ```
 
 Each group's Claude Code session runs with `cwd` set to its own subdirectory. The watchdog
-watches each directory independently. The merge session's cwd contains the other group
-directories as siblings so the merge prompt can reference them.
+watches each directory independently. The merge session's cwd is a peer of the group dirs;
+the merge prompt receives absolute paths to each group's result file and reads them via the
+standard file-read tool.
+
+**Note:** earlier revisions of the runner script symlinked documents from the parent tempdir
+into each group's cwd. That behavior was removed as an exfiltration vector — the runner
+script no longer touches paths outside the session cwd. If a consumer needs files available
+inside a session cwd, the enqueuer should write them into the payload or the engine entrypoint
+should copy them explicitly.
 
 ## Failure modes
 

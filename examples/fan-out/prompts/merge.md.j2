@@ -5,6 +5,10 @@ Group result files (read each and merge):
 - {{ path }}
 {% endfor %}
 
+{% if missing_groups %}
+Note: the following group(s) did not produce a result and are missing from the list above: {{ missing_groups | tojson }}. If any group output is missing, summarize what you have and note the gap in the overall summary.
+{% endif %}
+
 Your task: combine all per-document summaries into a single analysis with:
 1. A concatenated per-document summary list.
 2. A deduplicated entity set across all documents.

@@ -30,11 +30,52 @@ _ALWAYS_REDACT: tuple[str, ...] = ("SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_DB_URL
 _context_lock = threading.Lock()
 _context: dict[str, Any] = {}
 
+# Secret literal values injected by the config loader. Supplements the env-var values
+# resolved by RedactionFilter when the filter is instantiated.
+_extra_redacted_values: set[str] = set()
+_extra_lock = threading.Lock()
+
 
 def set_context(**kwargs: Any) -> None:
     """Attach persistent fields (e.g. worker_id, version) emitted on every event."""
     with _context_lock:
         _context.update(kwargs)
+
+
+def set_redacted_values(values: set[str]) -> None:
+    """Register additional literal values to redact from every event.
+
+    Called from observability.setup after config load so the loader's collected
+    `Config._secrets` values participate in redaction alongside the static env var set.
+    """
+    with _extra_lock:
+        _extra_redacted_values.clear()
+        _extra_redacted_values.update(v for v in values if v)
+
+
+def _current_secret_values(base: list[str]) -> list[str]:
+    with _extra_lock:
+        extras = list(_extra_redacted_values)
+    return [v for v in (base + extras) if v]
+
+
+def redact_mapping(d: dict[str, Any], secrets: list[str]) -> dict[str, Any]:
+    """Recursively replace any string leaf whose value contains a secret with a masked copy."""
+
+    def scrub(value: Any) -> Any:
+        if isinstance(value, str):
+            out = value
+            for s in secrets:
+                if s and s in out:
+                    out = out.replace(s, "***")
+            return out
+        if isinstance(value, dict):
+            return {k: scrub(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [scrub(v) for v in value]
+        return value
+
+    return scrub(d)
 
 
 def _snapshot_context() -> dict[str, Any]:
@@ -51,8 +92,12 @@ class RedactionFilter(logging.Filter):
         # Only redact values that are non-empty strings — empty env vars would wildcard-match.
         self._values = [v for v in (os.environ.get(n) for n in names) if v]
 
+    def current_values(self) -> list[str]:
+        return _current_secret_values(self._values)
+
     def filter(self, record: logging.LogRecord) -> bool:
-        for v in self._values:
+        values = self.current_values()
+        for v in values:
             if not v:
                 continue
             if isinstance(record.msg, str) and v in record.msg:
@@ -76,15 +121,16 @@ class JsonFormatter(logging.Formatter):
     """Emits one JSON object per line with event, timestamp, level, and attached context."""
 
     def format(self, record: logging.LogRecord) -> str:
+        secrets = _current_secret_values([os.environ.get(n, "") for n in _ALWAYS_REDACT])
         payload: dict[str, Any] = {
             "ts": datetime.now(UTC).isoformat(),
             "level": record.levelname.lower(),
-            "event": getattr(record, "event", record.getMessage()),
+            "event_type": getattr(record, "event", record.getMessage()),
         }
-        payload.update(_snapshot_context())
+        payload.update(redact_mapping(_snapshot_context(), secrets))
         fields = getattr(record, "fields", None)
         if isinstance(fields, dict):
-            payload.update(fields)
+            payload.update(redact_mapping(fields, secrets))
         if record.exc_info:
             payload["exc"] = self.formatException(record.exc_info)
         return json.dumps(payload, default=str)

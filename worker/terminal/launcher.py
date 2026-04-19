@@ -5,16 +5,31 @@ Ported from the reference implementation (lines 175-285) with every domain refer
 from __future__ import annotations
 
 import os
+import shlex
 import stat
 import subprocess
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from worker.utils.paths import trust_directory
+
+if TYPE_CHECKING:
+    from worker.config.models import JobType
 
 
 class LaunchError(RuntimeError):
     """Raised when the Terminal.app session cannot be opened."""
+
+
+# Map config `thinking_budget` -> Claude Code CLI `--effort` flag. Explicit mapping so
+# a consumer typo doesn't silently fall through to an unsupported value. Keep in sync with
+# the enum in schema/config.schema.json.
+_EFFORT_MAP = {
+    "none": "low",
+    "medium": "medium",
+    "high": "high",
+}
 
 
 def write_prompt_file(cwd: Path, prompt: str) -> Path:
@@ -23,30 +38,40 @@ def write_prompt_file(cwd: Path, prompt: str) -> Path:
     return prompt_path
 
 
-def write_runner_script(cwd: Path, *, link_from: Path | None = None) -> Path:
+def write_runner_script(
+    cwd: Path,
+    *,
+    job_type: JobType | None = None,
+    log_path: Path | None = None,
+) -> Path:
     """Write `_run.sh` that execs Claude Code with the prompt text.
 
     Uses the exact reference pattern `claude --dangerously-skip-permissions "$(cat _prompt.txt)"`.
-    When `link_from` is provided, documents in that directory are symlinked into `cwd` first
-    (used by fan_out groups that share the parent session's documents).
+    When `job_type` is provided, the model and effort level are passed as CLI flags.
+    When `log_path` is provided, stdout+stderr are tee'd into it.
     """
     real_cwd = os.path.realpath(str(cwd))
     runner = cwd / "_run.sh"
-    link_block = ""
-    if link_from is not None:
-        real_src = os.path.realpath(str(link_from))
-        link_block = (
-            f'for doc in "{real_src}"/*; do\n'
-            f'    base=$(basename "$doc")\n'
-            '    case "$base" in _*|.*|group_*|merge) continue;; esac\n'
-            '    [ -f "$doc" ] && ln -sf "$doc" . 2>/dev/null\n'
-            "done\n"
-        )
+
+    if job_type is not None:
+        effort = _EFFORT_MAP.get(job_type.thinking_budget, "medium")
+        model_arg = f"--model {shlex.quote(job_type.model)}"
+        effort_arg = f"--effort {shlex.quote(effort)}"
+    else:
+        model_arg = ""
+        effort_arg = ""
+
+    claude_cmd = (
+        f'claude --dangerously-skip-permissions {model_arg} {effort_arg} '
+        f'"$(cat _prompt.txt)"'
+    ).strip()
+    if log_path is not None:
+        claude_cmd = f'{claude_cmd} 2>&1 | tee {shlex.quote(str(log_path))}'
+
     script = (
         "#!/bin/bash\n"
-        f'cd "{real_cwd}"\n'
-        f"{link_block}"
-        'claude --dangerously-skip-permissions "$(cat _prompt.txt)"\n'
+        f"cd {shlex.quote(real_cwd)}\n"
+        f"{claude_cmd}\n"
     )
     runner.write_text(script, encoding="utf-8")
     runner.chmod(runner.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)

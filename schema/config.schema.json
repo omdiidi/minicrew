@@ -108,8 +108,11 @@
               "description": "Orchestration mode. 'single' runs one Terminal session per job. 'fan_out' runs N group sessions in parallel plus one merge session."
             },
             "skill": {
-              "type": ["string", "null"],
-              "description": "Optional Claude Code skill invocation (e.g. 'my_plugin:summarize') prefixed to the rendered prompt."
+              "description": "Optional Claude Code skill invocation (e.g. 'my_plugin:summarize') prefixed to the rendered prompt.",
+              "oneOf": [
+                {"type": "null"},
+                {"type": "string", "pattern": "^[a-z0-9_:-]+$"}
+              ]
             },
             "model": {
               "type": "string",
@@ -127,10 +130,12 @@
             },
             "prompt_template": {
               "type": "string",
+              "pattern": "^[A-Za-z0-9._-]+\\.md\\.j2$",
               "description": "Filename of the Jinja template under prompts/. The loader resolves it; not a path."
             },
             "result_filename": {
               "type": "string",
+              "pattern": "^[A-Za-z0-9._-]+$",
               "description": "Name of the result file the session is expected to produce. The watchdog polls for it; the engine reads it on completion."
             },
             "idle_timeout_seconds": {
@@ -152,14 +157,17 @@
                 "properties": {
                   "name": {
                     "type": "string",
+                    "pattern": "^[a-z0-9_]+$",
                     "description": "Group identifier. Becomes the subdirectory name group_<name> under the session cwd."
                   },
                   "prompt_template": {
                     "type": "string",
+                    "pattern": "^[A-Za-z0-9._-]+\\.md\\.j2$",
                     "description": "Filename of the Jinja template for this group. Resolved under prompts/."
                   },
                   "result_filename": {
                     "type": "string",
+                    "pattern": "^[A-Za-z0-9._-]+$",
                     "description": "Name of the file this group's Claude session is expected to write."
                   }
                 }
@@ -173,10 +181,12 @@
               "properties": {
                 "prompt_template": {
                   "type": "string",
+                  "pattern": "^[A-Za-z0-9._-]+\\.md\\.j2$",
                   "description": "Filename of the Jinja template for the merge session. Resolved under prompts/."
                 },
                 "result_filename": {
                   "type": "string",
+                  "pattern": "^[A-Za-z0-9._-]+$",
                   "description": "Final result filename produced by the merge session. Written into jobs.result."
                 }
               }

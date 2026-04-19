@@ -9,8 +9,14 @@ import time
 from pathlib import Path
 from xml.sax.saxutils import escape
 
+from dotenv import dotenv_values
+
 # Baseline PATH for the launchd environment — matches what a login shell sees for Homebrew + system bins.
 STANDARD_PATH = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+
+# Env vars loaded from .env that must be forwarded into the launchd plist so the
+# worker process sees Supabase credentials when it starts under launchd.
+_FORWARDED_ENV_KEYS = ("SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_DB_URL")
 
 
 def _label(instance: int) -> str:
@@ -70,6 +76,42 @@ def install(
 ) -> None:
     label = _label(instance)
     plist_path = _plist_path(instance)
+    uid = os.getuid()
+
+    # Collision check (I12): refuse to silently replace an existing install. The top-level
+    # retry-on-race logic below handles the `already loaded` case inside this invocation;
+    # here we fail loudly when the caller thinks they're installing a fresh instance.
+    if plist_path.exists():
+        raise RuntimeError(
+            f"Instance {instance} is already installed at {plist_path}. "
+            "Run `bash teardown.sh` or `/minicrew:teardown` first, or pick a different instance number."
+        )
+    probe = subprocess.run(
+        ["launchctl", "list"], capture_output=True, text=True, check=False
+    )
+    if probe.returncode == 0 and label in (probe.stdout or ""):
+        raise RuntimeError(
+            f"Instance {instance} label {label} is already loaded in launchctl. "
+            "Run `bash teardown.sh` or `/minicrew:teardown` first, or pick a different instance number."
+        )
+
+    # Load Supabase credentials from .env at the repo root (worker_pkg_root).
+    env_path = worker_pkg_root / ".env"
+    if not env_path.exists():
+        raise RuntimeError(
+            f"Required .env not found at {env_path}. Run the steps in SETUP.md first to create it."
+        )
+    env_values = dotenv_values(env_path)
+
+    plist_env = {
+        "MINICREW_CONFIG_PATH": str(config_path),
+        "PATH": STANDARD_PATH,
+    }
+    for key in _FORWARDED_ENV_KEYS:
+        val = env_values.get(key)
+        if val:
+            plist_env[key] = val
+
     args = [str(python), "-m", "worker", "--instance", str(instance), "--role", role]
     if poll_interval:
         args += ["--poll-interval", str(poll_interval)]
@@ -82,16 +124,8 @@ def install(
         working_dir=str(worker_pkg_root),
         stdout=stdout,
         stderr=stderr,
-        env={
-            "MINICREW_CONFIG_PATH": str(config_path),
-            "PATH": STANDARD_PATH,
-        },
+        env=plist_env,
     )
-    # Tear down any existing service; tolerate non-loaded case.
-    uid = os.getuid()
-    subprocess.run(["launchctl", "bootout", f"gui/{uid}/{label}"], check=False, capture_output=True)
-    # bootout is async — short sleep + retry loop is simpler than parsing launchctl print.
-    time.sleep(0.5)
     plist_path.parent.mkdir(parents=True, exist_ok=True)
     plist_path.write_text(plist_xml)
     for _attempt in range(3):

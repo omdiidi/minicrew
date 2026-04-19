@@ -14,10 +14,10 @@ This is minicrew's security contract. Any change here requires thinking about th
 
 **Not trusted:**
 - End users whose free-text input becomes the value of `jobs.payload.*` fields. Treat any string that originated with an end user as potentially hostile: prompt injection, script injection into shell commands, traversal attempts, oversized inputs.
-- Other tenants on the same Supabase project if RLS is misconfigured. Scope row access with RLS on the consumer side.
+- Other tenants on the same Supabase project if RLS is misconfigured. Restrict row access with RLS on the consumer side.
 - The public internet. The worker machines do not accept inbound connections; all data flow is outbound to Supabase.
 
-**Out of scope for v1:** multi-tenant job isolation on a single worker fleet; cryptographic signing of job payloads; sandboxed-per-job filesystem (each Terminal session shares a single macOS user account).
+**Not addressed in v1:** multi-tenant job isolation on a single worker fleet; cryptographic signing of job payloads; sandboxed-per-job filesystem (each Terminal session shares a single macOS user account).
 
 ## Secrets handling
 
@@ -48,12 +48,12 @@ Rotate the Supabase service role key if it was exposed (session export, shared t
 ## RLS guidance
 
 - The worker authenticates as the service role; it bypasses all RLS policies. This is correct: the worker needs unrestricted access to update any row in `jobs` and `workers`.
-- Consumer backends should authenticate with scoped roles. Policies on `jobs` should:
+- Consumer backends should authenticate with role-restricted credentials. Policies on `jobs` should:
   - Allow INSERT by the consumer backend's role, constrained to rows where `enqueued_by` matches its identity.
   - Allow SELECT by end users restricted to their own `enqueued_by` rows (if end users read job status directly).
   - Forbid UPDATE by anyone except the service role — keeps the audit trail immutable after completion.
-- Policies on `workers` should forbid all access except the service role. Worker identities are operational metadata; consumers do not need them.
-- Policies on `worker_events` (reserved for v2 log sinks) should forbid all access except the service role.
+- Policies on `workers` should allow write only by the service role; allow read by the authenticated role so operator dashboards can list the fleet.
+- Policies on `worker_events` (reserved for v2 log sinks) follow the same pattern as `workers`: write only by the service role, read by the authenticated role.
 
 ## Prompt injection
 
@@ -94,14 +94,16 @@ The worker invokes Claude Code as `claude --dangerously-skip-permissions ...`. T
 **Mitigations:**
 - Only enqueue jobs from a trusted consumer backend. Do not expose the service role key to end users or let them directly insert rows.
 - Use `| tojson` on every untrusted string payload field (see previous section).
-- Consider Hardened Mode (next section) for job types that process untrusted payloads.
 - Run the worker on a Mac Mini that has no other sensitive responsibilities; treat it as a single-purpose appliance.
+- See the Hardened Mode section below for the v2 plan to drop `--dangerously-skip-permissions` entirely.
 
-## Hardened mode
+## Hardened mode (v2 — documented shape, not implemented)
 
-Hardened mode replaces `--dangerously-skip-permissions` with an explicit tool allowlist via a Claude Code settings file. Disables `Bash` (the highest-risk tool), keeps read/edit/search/fetch.
+Hardened mode is a v2 feature. **In v1, every worker invokes Claude Code with `--dangerously-skip-permissions`; there is no opt-out.** The shape below describes the planned v2 surface so operators can anticipate the change and pre-write a settings file if they choose.
 
-**Settings file** (drop into `~/.claude/settings.json` on the worker machine to enable globally):
+**Planned v2 mechanism:** the worker will no longer pass `--dangerously-skip-permissions` and will instead rely on Claude Code honoring `~/.claude/settings.json` as the outer tool allowlist. Disables `Bash` (the highest-risk tool); keeps read/edit/search/fetch.
+
+**Settings file** (drop into `~/.claude/settings.json` on the worker machine to pre-stage the v2 allowlist):
 
 ```json
 {
@@ -124,9 +126,9 @@ Hardened mode replaces `--dangerously-skip-permissions` with an explicit tool al
 
 Note the absence of `Bash` — hardened mode trades the ability to run shell commands for removing the command-execution primitive. Job types that rely on shell will stop working; this is intentional.
 
-**How to enable (v1):** manually write `~/.claude/settings.json` as above. The worker still invokes Claude Code with `--dangerously-skip-permissions`, but Claude Code honors the settings-file allowlist as the outer bound — denied tools remain denied regardless of the flag.
+**v1 status:** v1 always passes `--dangerously-skip-permissions`. A settings file placed at `~/.claude/settings.json` today will not reliably constrain v1 sessions because the CLI flag overrides the allowlist in current Claude Code behavior. Do not rely on this file as a v1 security control.
 
-**Future:** `/minicrew:setup --hardened` will generate this settings file as part of Step 6. Documented here as forthcoming; not yet wired.
+**v2 status:** v2 will drop the `--dangerously-skip-permissions` flag; until then, rely on the v1 mitigations listed above (trusted enqueuers, `| tojson` on untrusted strings, appliance-mode deployment).
 
 ## Audit trail
 

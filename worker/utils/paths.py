@@ -33,9 +33,10 @@ def tmp_root() -> Path:
 def trust_directory(directory: str | Path) -> None:
     """Writes projects[<dir>].hasTrustDialogAccepted=true in ~/.claude.json.
 
-    Pre-trusts the directory, its realpath, and the common /tmp realpaths so headless
-    Claude Code sessions don't block on the trust dialog. Ported from the reference
-    implementation (lines 175-197).
+    Pre-trusts the target directory and its realpath only. We deliberately do NOT trust
+    `/tmp` or `/private/tmp` wholesale — doing so would accept any future Claude Code
+    session cwd landing under /tmp without its own opt-in, which is a lateral-trust
+    vector for anyone with shell access on the machine.
     """
     claude_json = Path.home() / ".claude.json"
     directory = str(directory)
@@ -49,8 +50,6 @@ def trust_directory(directory: str | Path) -> None:
         real_dir = os.path.realpath(directory)
         if real_dir != directory:
             projects.setdefault(real_dir, {})["hasTrustDialogAccepted"] = True
-        projects.setdefault("/tmp", {})["hasTrustDialogAccepted"] = True
-        projects.setdefault("/private/tmp", {})["hasTrustDialogAccepted"] = True
         claude_json.write_text(json.dumps(config, indent=2))
     except OSError as e:
         # Best-effort — don't crash the worker over a trust cache write failure.

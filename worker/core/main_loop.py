@@ -52,7 +52,7 @@ def run(opts: RunOptions) -> int:
     assert_db_url_is_direct(cfg.db.direct_url)
 
     worker_id = f"{cfg.worker.prefix}-{socket.gethostname()}-{opts.instance}"
-    setup_observability(cfg.logging, worker_id, opts.instance)
+    setup_observability(cfg.logging, worker_id, opts.instance, cfg=cfg)
     emit(WORKER_STARTED, version=__version__, role=cfg.worker.role, instance=opts.instance)
 
     signals.install()
@@ -86,7 +86,7 @@ def run(opts: RunOptions) -> int:
                 emit(JOB_CLAIMED, job_id=job["id"], job_type=job.get("job_type"))
                 state.set_current_job(job["id"])
                 try:
-                    orchestration.run(client, cfg, job)
+                    orchestration.run(client, cfg, job, worker_id=worker_id)
                 finally:
                     state.set_current_job(None)
             except Exception as e:

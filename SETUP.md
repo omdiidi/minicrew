@@ -69,9 +69,12 @@ SUPABASE_URL=<value from step 2.1>
 SUPABASE_SERVICE_ROLE_KEY=<value from step 2.2>
 SUPABASE_DB_URL=<value from step 2.3>
 MINICREW_CONFIG_PATH=<value from step 2.6>
+WORKER_ROLE=<value from step 2.4>
 ```
 
-**Success criterion:** `ls -l .env` shows `-rw-------` (mode 600) and the file contains all four variables non-empty.
+`WORKER_ROLE` is the default role (`primary` or `secondary`) applied to every worker instance on this machine. Skills such as `/minicrew:add-worker` read it from this file when picking a role for a new instance.
+
+**Success criterion:** `ls -l .env` shows `-rw-------` (mode 600) and the file contains all five variables non-empty.
 
 **Failure response:** if `.env` already existed before this step and has values, ask the user whether to overwrite. Do not silently overwrite existing credentials.
 
@@ -105,7 +108,7 @@ python3 -m venv .venv
 
 (Substitute the actual absolute path from Step 2.6 if the shell does not have `.env` loaded.)
 
-**Success criterion:** exit code 0, stdout `config valid`.
+**Success criterion:** exit code 0, stdout beginning with `ok: ` followed by the validated config path.
 
 **Failure response:** print the validator's error message verbatim (it includes the JSON path to the bad field). STOP. Do not proceed to launchd install with an invalid config. Ask the user to fix their `worker-config/config.yaml` (or run `/minicrew:scaffold-project` in their consumer repo once skills are installed).
 
@@ -165,7 +168,7 @@ tail -n 50 logs/worker-1.log
 **Success criterion:**
 - `launchctl list | grep com.minicrew.worker` shows N rows, one per instance, each with a non-`-` PID (the services are running, not failed).
 - `tail logs/worker-1.log` contains a `worker_started` event in JSON.
-- `python -m worker --status` prints a JSON object with keys `workers`, `queue_depth`, `recent_failures` and exits 0.
+- `python -m worker --status` prints a JSON object with keys `workers`, `queue_depth`, `recent_errors_1h`, and `recent_failed_permanent_24h` and exits 0.
 
 **Failure response:** if a worker is listed but has PID `-` and a non-zero exit status, open `logs/worker-<n>.err` and report the stderr to the user. Common causes: `.env` missing a value, `MINICREW_CONFIG_PATH` not readable by the launchd process, or a pooler URL accidentally supplied as `SUPABASE_DB_URL` (the engine will fail startup with a pointer to `docs/SUPABASE-SCHEMA.md#direct-vs-pooler`).
 

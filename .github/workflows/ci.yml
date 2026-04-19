@@ -68,16 +68,16 @@ jobs:
       - name: Lint with ruff
         run: ruff check worker/ tests/
 
-      # Domain scrubs use external pattern files so the CI workflow itself doesn't
-      # trip the grep (patterns can't live inline in the step that invokes grep).
+      # Domain scrubs use external pattern files under ci/ so the workflow itself
+      # doesn't trip the grep (patterns can't live inline in the step that invokes grep).
       - name: Primary domain scrub (word-boundary aware)
         run: |
-          ! grep -rnE -f .github/domain-scrub-primary.txt --exclude-dir=.git --exclude-dir=.github .
+          ! grep -rnE -f ci/domain-scrub-primary.txt --exclude-dir=.git --exclude-dir=ci --exclude-dir=.venv --exclude-dir=logs .
 
       - name: Secondary domain scrub
         run: |
-          ! grep -rniE -f .github/domain-scrub-secondary.txt --exclude-dir=.git --exclude-dir=.github .
+          ! grep -rniE -f ci/domain-scrub-secondary.txt --exclude-dir=.git --exclude-dir=ci --exclude-dir=.venv --exclude-dir=logs .
 
       - name: Git log scrub
         run: |
-          ! git log --all --oneline | grep -iE -f .github/domain-scrub-gitlog.txt
+          ! git log --all --oneline | grep -iE -f ci/domain-scrub-gitlog.txt

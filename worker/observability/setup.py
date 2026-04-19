@@ -4,16 +4,21 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from worker.observability.events import JsonFormatter, RedactionFilter, set_context
+from worker.observability.events import (
+    JsonFormatter,
+    RedactionFilter,
+    set_context,
+    set_redacted_values,
+)
 from worker.observability.sinks import FileSink
 
 if TYPE_CHECKING:
-    from worker.config.models import LoggingConfig
+    from worker.config.models import Config, LoggingConfig
 
 _LEVELS = {"debug": logging.DEBUG, "info": logging.INFO, "warn": logging.WARNING, "error": logging.ERROR}
 
 
-def setup(logging_cfg: LoggingConfig, worker_id: str, instance: int) -> None:
+def setup(logging_cfg: LoggingConfig, worker_id: str, instance: int, cfg: Config | None = None) -> None:
     """Idempotent: removes old handlers, installs fresh ones from config."""
     logger = logging.getLogger("minicrew")
     logger.setLevel(_LEVELS.get(logging_cfg.level, logging.INFO))
@@ -42,3 +47,5 @@ def setup(logging_cfg: LoggingConfig, worker_id: str, instance: int) -> None:
             logger.addHandler(handler)
 
     set_context(worker_id=worker_id, instance=instance)
+    if cfg is not None:
+        set_redacted_values(set(cfg._secrets))

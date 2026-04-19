@@ -14,21 +14,21 @@ Read `~/.claude/minicrew.json` for `repo_path`.
 - If the file is missing, tell the user: "minicrew is not installed on this machine yet. Read `SETUP.md` in the minicrew repo first." and stop.
 - Otherwise store the path as `REPO_PATH`.
 
-## 2. Count existing instances
+## 2. Enumerate existing instances
 
 Run:
 
 ```
-launchctl list | grep -c com.minicrew.worker
+launchctl list | grep com.minicrew.worker.
 ```
 
-Store the result as `CURRENT_COUNT`.
+Parse the output to extract the instance number at the end of each label (e.g. `com.minicrew.worker.2` → `2`). Store the set of used instance numbers as `USED`.
 
 ## 3. Pick the next instance number
 
-`NEXT_INSTANCE = CURRENT_COUNT + 1`.
+Pick the **lowest integer in `1..5` that is NOT in `USED`** as `NEXT_INSTANCE`. This correctly handles non-contiguous installs (for example if instance 2 was torn down and instances 1 and 3 are running, `NEXT_INSTANCE = 2`).
 
-If `NEXT_INSTANCE` is greater than 5, stop and tell the user: "This machine already has 5 worker instances, which is the supported maximum. Add another Mac Mini with `/minicrew:add-machine` instead."
+If `USED` contains every number in `1..5`, stop and tell the user: "This machine already has 5 worker instances, which is the supported maximum. Add another Mac Mini with `/minicrew:add-machine` instead."
 
 ## 4. Read role and config path from `.env`
 

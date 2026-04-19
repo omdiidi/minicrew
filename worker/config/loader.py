@@ -164,19 +164,29 @@ def load_config(path: str | Path | None = None) -> Config:
     )
 
     # Validate referenced prompt templates exist on disk — a missing file is a hard fail at load time.
-    for name, jt in cfg.job_types.items():
-        tmpl = cfg.prompts_dir / jt.prompt_template
+    # Also enforce path traversal guard: resolved template path must sit under prompts_dir.
+    prompts_root_resolved = cfg.prompts_dir.resolve()
+
+    def _check_template(label: str, template_name: str) -> Path:
+        tmpl = (cfg.prompts_dir / template_name).resolve()
+        try:
+            tmpl.relative_to(prompts_root_resolved)
+        except ValueError as exc:
+            raise ConfigError(
+                f"{label} template '{template_name}' resolves outside {prompts_root_resolved} "
+                "(path traversal rejected)"
+            ) from exc
         if not tmpl.exists():
-            raise ConfigError(f"job_type '{name}' references missing {tmpl}")
+            raise ConfigError(f"{label} references missing {tmpl}")
+        return tmpl
+
+    for name, jt in cfg.job_types.items():
+        _check_template(f"job_type '{name}'", jt.prompt_template)
         if jt.mode == "fan_out":
             for group in jt.groups:
-                gt = cfg.prompts_dir / group.prompt_template
-                if not gt.exists():
-                    raise ConfigError(f"fan_out group '{group.name}' references missing {gt}")
+                _check_template(f"fan_out group '{group.name}'", group.prompt_template)
             if jt.merge:
-                mt = cfg.prompts_dir / jt.merge.prompt_template
-                if not mt.exists():
-                    raise ConfigError(f"fan_out merge references missing {mt}")
+                _check_template("fan_out merge", jt.merge.prompt_template)
 
     payload_schema_file = root / "payload.schema.json"
     if payload_schema_file.exists():

@@ -114,7 +114,7 @@ row is requeued to `pending` with `worker_id=null` and `started_at=null`, and a
 worker/
   __init__.py              # exports __version__
   __main__.py              # entry point: python -m worker
-  cli.py                   # arg parsing (--instance, --role, --status, --reload)
+  cli.py                   # arg parsing (--instance, --role, --status, --validate)
   core/
     main_loop.py           # the poll-claim-orchestrate-sleep loop
     claim.py               # claim_next_job wrapper

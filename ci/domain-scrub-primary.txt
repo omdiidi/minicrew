@@ -7,3 +7,5 @@ construction
 general_contractor
 \btakeoff\b
 blueprint
+\bscope\b
+\bdrawing\b

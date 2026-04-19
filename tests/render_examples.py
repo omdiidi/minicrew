@@ -35,8 +35,10 @@ DUMMY_CONFIG_VIEW = {
     "reaper": {"stale_threshold_seconds": 120, "interval_seconds": 60, "max_attempts": 3},
     "job_types": {"dummy": {"mode": "single", "model": "claude-sonnet-4-6"}},
 }
-DUMMY_GROUP = {"name": "first_third", "document_indices": [0, 1]}
+DUMMY_GROUP = {"name": "first_third", "document_indices": [0, 1], "result_filename": "group_result.json"}
 DUMMY_GROUP_RESULT_PATHS = ["/tmp/g1.json", "/tmp/g2.json", "/tmp/g3.json"]
+DUMMY_MISSING_GROUPS: list[str] = []
+DUMMY_MERGE = {"result_filename": "result.json"}
 
 
 def _render_one(prompts_dir: Path, filename: str) -> tuple[bool, str]:
@@ -49,6 +51,8 @@ def _render_one(prompts_dir: Path, filename: str) -> tuple[bool, str]:
             "config": DUMMY_CONFIG_VIEW,
             "group": DUMMY_GROUP,
             "group_result_paths": DUMMY_GROUP_RESULT_PATHS,
+            "missing_groups": DUMMY_MISSING_GROUPS,
+            "merge": DUMMY_MERGE,
         }
         tmpl.render(**ctx)
         return True, ""
