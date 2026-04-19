@@ -111,13 +111,13 @@ begin
      where worker_id = p_worker_id and status = 'running'
   )
   update jobs j set
-    status = case when s.next_attempt > s.effective_max then 'failed_permanent' else 'pending' end,
+    status = case when s.next_attempt >= s.effective_max then 'failed_permanent' else 'pending' end,
     worker_id = null,
     started_at = null,
     claimed_at = null,
     attempt_count = s.next_attempt,
-    completed_at = case when s.next_attempt > s.effective_max then now() else j.completed_at end,
-    error_message = case when s.next_attempt > s.effective_max
+    completed_at = case when s.next_attempt >= s.effective_max then now() else j.completed_at end,
+    error_message = case when s.next_attempt >= s.effective_max
                          then format('Exceeded max_attempts=%s (worker %s)', s.effective_max, p_worker_id)
                          else null end
   from stale s where j.id = s.id;

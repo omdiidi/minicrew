@@ -146,7 +146,7 @@ Called exclusively by the reaper thread, inside the advisory-lock transaction. T
 
 1. Selects all `running` jobs owned by that worker.
 2. Increments `attempt_count`.
-3. Transitions each to `pending` unless the next attempt would exceed `coalesce(max_attempts, p_default_max)`, in which case `failed_permanent` and a descriptive `error_message` are written. `max_attempts` is the total number of attempts allowed before poison-pill: with `max_attempts=3`, `attempt_count` can reach 3 (three attempts total); the fourth claim cycle triggers the poison transition.
+3. Transitions each to `pending` unless the next attempt would reach `coalesce(max_attempts, p_default_max)`, in which case `failed_permanent` and a descriptive `error_message` are written. `max_attempts` is the total number of runs allowed: with `max_attempts=3`, attempts 1 and 2 fail and requeue; the third attempt's failure triggers the poison transition (the row never claims a fourth time).
 4. Clears `worker_id`, `claimed_at`, and `started_at`.
 5. Returns the number of rows requeued.
 

@@ -37,9 +37,9 @@ session, `started_at` is written. On completion, the worker writes `result` (JSO
 `status='completed'` with `completed_at`. On failure, `status='error'` and `error_message` are
 set. If the worker dies or the idle watchdog kills the session, the reaper (or startup recovery
 on the next boot) requeues the row back to `pending` and increments `attempt_count`; once the
-retry budget is exhausted (`max_attempts` is the total number of attempts allowed, so
-`max_attempts=3` poisons on the fourth claim cycle) the row becomes `failed_permanent` with a
-descriptive `error_message`.
+retry budget is exhausted (`max_attempts` is the total number of runs allowed, so with
+`max_attempts=3` the third attempt's failure poisons the row) it becomes `failed_permanent`
+with a descriptive `error_message`.
 
 ## Atomic claim
 
