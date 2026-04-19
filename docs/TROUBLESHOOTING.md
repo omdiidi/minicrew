@@ -43,7 +43,7 @@ Logs show `job_claimed` events but no `session_launched` events. Jobs sit in `st
 until the reaper requeues them.
 
 ### Cause
-Claude Code is not authenticated on this machine, or the trust dialog is blocking the headless
+Claude Code is not authenticated on this machine, or the trust dialog is blocking the unattended
 launch.
 
 ### Fix

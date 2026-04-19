@@ -88,7 +88,7 @@ Rule of thumb: **any string field that originated with an end user MUST be rende
 
 ## `--dangerously-skip-permissions` posture
 
-The worker invokes Claude Code as `claude --dangerously-skip-permissions ...`. This is required for headless automation — otherwise Claude Code blocks on a permission confirmation dialog that no one is there to click.
+The worker invokes Claude Code as `claude --dangerously-skip-permissions ...`. This is required for unattended automation — the Terminal window is visible by design, but no human is watching it click through permission dialogs between tool calls, so Claude Code would otherwise block on the first confirmation prompt.
 
 **Risk:** a malicious job payload could render a prompt that instructs Claude Code to use the `Bash` tool to run arbitrary shell commands on the Mac Mini. That shell runs as the user account hosting the worker. Combined with prompt injection via unescaped template variables, this is a command-execution primitive for anyone who can enqueue a job.
 

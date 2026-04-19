@@ -4,7 +4,7 @@ Generic Claude Code worker template for Mac Mini fleets — zero-terminal setup,
 
 ## What it is
 
-minicrew runs headless Claude Code sessions on a fleet of Mac Minis. Each worker polls a Supabase-backed job queue, claims jobs atomically, and launches a visible macOS Terminal.app window hosting a `claude` session for each job. When the job finishes, the worker records the result back to Supabase and loops.
+minicrew runs **unattended, visible** Claude Code sessions on a fleet of Mac Minis. Each worker polls a Supabase-backed job queue, claims jobs atomically, and launches a real macOS Terminal.app window hosting a `claude` session for each job. The window is deliberately visible so you can watch work happen, tail logs by eye, or intervene during debugging — but no human needs to click anything for a job to run end-to-end. When the job finishes, the worker records the result back to Supabase, closes the window, and loops.
 
 The engine is domain-agnostic. Any project that can insert a row into a Postgres table can enqueue work: document summarization, classification, analysis, multi-step reasoning, anything Claude Code can do. Consumers configure job types via a YAML file plus Jinja prompt templates — no Python required.
 

@@ -16,7 +16,7 @@ minicrew is a generic Claude Code worker template for Mac Mini fleets: polling, 
 
 - Never push to the GitHub remote without explicit user authorization. Show the diff, wait for approval.
 - Never reference the original source domain of this architecture. This is a generic template; keep it generic. Neutral example job types only (`summarize`, `classify`, `analyze_document`).
-- `--dangerously-skip-permissions` is intentional for headless automation. See [SECURITY.md](./SECURITY.md) before questioning or removing it.
+- `--dangerously-skip-permissions` is intentional for unattended automation (Terminal windows are visible by design but no one is clicking through permission dialogs between tool calls). See [SECURITY.md](./SECURITY.md) before questioning or removing it.
 - Do not edit `worker/terminal/launcher.py` or `worker/terminal/shutdown.py` without first reading [docs/TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md). The `osascript` and Terminal.app incantations in those files are load-bearing — the tab-to-window id lookup, the `/exit` shutdown sequence, and the `~/.claude/projects/` cleanup each guard against a specific reproducible failure mode.
 
 ## Version
