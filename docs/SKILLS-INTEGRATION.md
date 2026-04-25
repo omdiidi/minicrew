@@ -48,6 +48,15 @@ it trusts that `SETUP.md` installed whatever the consumer referenced. The skill 
 reference any globally-installed skill, not just minicrew's own (for example, a consumer that
 has a `my-plugin:summarize` skill installed can reference it as `skill: my-plugin:summarize`).
 
+For the full prompt-rendering contract (template variables, `_finalize`, result-file
+contract, `_progress.jsonl` semantics), see [PROMPTS.md](./PROMPTS.md).
+
+**The skill prefix does NOT apply to `mode: ad_hoc` or `mode: handoff`.** Those modes
+use built-in templates (`worker/builtin_prompts/ad_hoc.md.j2` and `handoff.md.j2`)
+and the schema forbids the `skill` field on those modes. If you need skill-like
+behavior inside an ad_hoc or handoff session, the caller-side dispatcher should
+embed the slash command into the prompt body it sends.
+
 ## Skill authoring for consumers
 
 A consumer that wants custom per-job behavior writes its own Claude skill, installs it globally
@@ -56,6 +65,13 @@ into `~/.claude/commands/<plugin>/<name>.md` on every worker machine, and refere
 reference is the Claude Code documentation on custom commands. minicrew does not validate skill
 names or content; if a job fails because the referenced skill is missing, the failure surfaces
 as an error from Claude Code inside the terminal session log.
+
+## OS auto-detection inside skills
+
+Skills auto-detect OS at the top of each conversational flow (`uname -s`) and branch into the
+appropriate commands. Users never specify their OS manually; the skill asks the machine.
+This keeps skill invocations identical across Mac Mini and Linux Mint deployments and lets
+mixed-OS fleets share one skill catalog.
 
 ## Compatibility note
 

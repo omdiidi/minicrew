@@ -136,3 +136,5 @@ Tell the user:
 > 1. On your Mac Mini, either run `/minicrew:setup` and point `MINICREW_CONFIG_PATH` at the absolute path above, **or** edit the Mac Mini's `.env` directly to set `MINICREW_CONFIG_PATH=<ABSOLUTE_PATH>` and restart the workers.
 > 2. Edit `worker-config/prompts/<JOB_TYPE_NAME>.md.j2` to reflect your actual prompt.
 > 3. When you're ready to add more job types, run `/minicrew:add-job-type` in this directory."
+
+Note: on Linux Mint XFCE deployments you can add an optional `platform:` block to `config.yaml` to tune terminal emulator, display mode (visible or tmux), and timeouts. See `docs/LINUX.md` and `docs/CONFIG-REFERENCE.md`.

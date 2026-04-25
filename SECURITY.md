@@ -22,8 +22,9 @@ This is minicrew's security contract. Any change here requires thinking about th
 ## Secrets handling
 
 - Secrets live in `.env` only. `.env` is in `.gitignore`. `.env.example` is the committed template with placeholders.
-- `chmod 600 .env` is set by `SETUP.md` step 3 AND re-asserted by `setup.sh` and `worker/utils/launchd.py install` on every run. Do not loosen it.
-- The launchd plist at `~/Library/LaunchAgents/com.minicrew.worker.N.plist` does **not** carry secrets. It contains only `MINICREW_CONFIG_PATH` and `PATH`. The worker process loads `.env` itself at startup via `python-dotenv`. This keeps credentials out of the plist file (which lives in a directory without tight permissions) and out of `launchctl print` output.
+- `chmod 600 .env` is set by `SETUP.md` step 3 AND re-asserted by `setup.sh` and `python -m worker.platform install` on every run. Do not loosen it.
+- **macOS:** the launchd plist at `~/Library/LaunchAgents/com.minicrew.worker.N.plist` does **not** carry secrets. It contains only `MINICREW_CONFIG_PATH` and `PATH`. The worker process loads `.env` itself at startup via `python-dotenv`. This keeps credentials out of the plist file (which lives in a directory without tight permissions) and out of `launchctl print` output.
+- **Linux:** the systemd user unit at `~/.config/systemd/user/minicrew-worker-N.service` likewise carries **no secrets**. Units are written mode `0644` (readable by the owning uid and world-readable within `~/.config/`, which is mode 0755 by default — no secrets means no exposure). `.env` stays `0600`. The unit contains only `MINICREW_CONFIG_PATH`, `PATH`, `DISPLAY`, `XAUTHORITY`, and `XDG_SESSION_TYPE=x11`. No `EnvironmentFile=.env` directive — Python's `load_dotenv` is the sole dotenv reader, avoiding the `sudo systemctl --user` root-read footgun described below. Parity guarantee: no secret ever appears in a service-manager–owned file on either OS.
 - Secrets never appear in log events. The observability layer's JSON formatter runs every event through a redaction filter before writing.
 - Redaction list (always redacted, cannot be disabled): `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_DB_URL`. Consumers may add additional names via `logging.redact_env` in `config.yaml`.
 
@@ -32,15 +33,22 @@ This is minicrew's security contract. Any change here requires thinking about th
 Rotate the Supabase service role key if it was exposed (session export, shared terminal, leaked transcript).
 
 1. In the Supabase Dashboard → Project Settings → API → "Reset service_role key". Copy the new key.
-2. On each Mac Mini in the fleet:
+2. On each deployment box in the fleet:
    ```bash
    # Edit .env in place; set SUPABASE_SERVICE_ROLE_KEY=<new key>
    chmod 600 .env
 
    # Restart every worker instance — each worker re-reads .env on startup via python-dotenv.
-   # Plist regeneration is NOT required: the plist does not carry secrets.
+   # Unit-file regeneration is NOT required: no secrets are in the plist or the systemd unit.
+
+   # macOS:
    for i in 1 2 3 4 5; do
      launchctl kickstart -k gui/$(id -u)/com.minicrew.worker.$i 2>/dev/null || true
+   done
+
+   # Linux Mint XFCE:
+   for i in 1 2 3 4 5; do
+     systemctl --user restart minicrew-worker-$i.service 2>/dev/null || true
    done
    ```
 3. Confirm with `.venv/bin/python -m worker --status` on each machine; the fleet should be healthy within one poll interval.
@@ -97,6 +105,45 @@ The worker invokes Claude Code as `claude --dangerously-skip-permissions ...`. T
 - Use `| tojson` on every untrusted string payload field (see previous section).
 - Run the worker on a Mac Mini that has no other sensitive responsibilities; treat it as a single-purpose appliance.
 - See the Hardened Mode section below for the v2 plan to drop `--dangerously-skip-permissions` entirely.
+
+## X11 threat model (Linux Mint XFCE)
+
+On X11, any process running under the same uid can inject keystrokes into any X window
+belonging to that uid, using `xdotool` or the raw XTEST extension. The X server treats
+same-uid input injection as legitimate automation.
+
+**Risk.** minicrew's Claude sessions run with `--dangerously-skip-permissions`, which grants
+the session unrestricted Bash + filesystem access. On Linux Mint, a sibling process in the
+same desktop session — a browser extension, an editor plugin, a background daemon under the
+same uid — can script keystrokes into the visible Claude terminal and escalate to arbitrary
+code execution.
+
+**Mitigation on shared or multi-use boxes:** deploy the worker under a dedicated `minicrew`
+uid distinct from the operator's daily-driver account. LightDM auto-logs-in as that uid,
+the worker runs only there, and no other graphical applications share the session. See
+[`docs/LINUX.md`](./docs/LINUX.md) for the dedicated-user setup walkthrough.
+
+**On a dedicated Mac-Mini-equivalent box** (the machine exists solely to run minicrew, no
+other graphical workloads), the threat model matches the Mac deployment: same-uid processes
+on macOS can also drive Terminal.app via osascript, so the "trust nothing running on this box"
+posture is consistent across both OSes.
+
+## WARNING: never run `sudo systemctl --user` on Linux
+
+Running `sudo systemctl --user ...` spawns a root user manager that reads the target uid's
+`.env` file **as root** and leaks its contents into the root-visible journal, defeating the
+`chmod 600 .env` protection and exposing `SUPABASE_SERVICE_ROLE_KEY` to anyone with root.
+This is an easy mistake to make — most systemd docs assume system units and use `sudo` by
+default, but user units are explicitly not that.
+
+Always run `systemctl --user` as the owning uid (no `sudo`). If you need to inspect or
+manage a unit running under a different uid, `sudo machinectl shell user@.host` gives you a
+shell under that uid without the env-leak. Alternatively, `su - <user>` then
+`systemctl --user ...` from there.
+
+If you already ran `sudo systemctl --user` once with a populated `.env`, rotate the Supabase
+service role key (see the Key rotation section above) and consider the journal's root-only
+entries for that unit as contaminated.
 
 ## Hardened mode (v2 — documented shape, not implemented)
 

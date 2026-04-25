@@ -444,8 +444,18 @@ curl "$SUPABASE_URL/rest/v1/jobs?id=eq.$JOB_ID&select=status,result,error_messag
 
 Expected within the configured `timeout_seconds`: one row with `status: "completed"` and a non-null `result` JSON object. If `status: "error"`, read `error_message`; if `status: "failed_permanent"`, the job exceeded `max_attempts`.
 
+## Optional `platform:` block (Linux tuning)
+
+Consumer `config.yaml` may include an optional `platform:` top-level block for Linux-specific
+tuning (display mode, terminal emulator, window-open timeout). The block is entirely optional
+— omitting it produces sane defaults for whichever OS the worker actually runs on. Macs
+ignore the `linux:` sub-block. See [docs/CONFIG-REFERENCE.md](./docs/CONFIG-REFERENCE.md) for
+the field reference and [docs/LINUX.md](./docs/LINUX.md) for the deployment runbook on Linux
+Mint XFCE.
+
 ## When to need more
 
 - Multi-step fan-out/fan-in (N parallel sessions + one merge) — see [docs/ORCHESTRATION.md](./docs/ORCHESTRATION.md).
 - Priority tuning, reaper behavior, multi-machine coordination — see [docs/QUEUEING.md](./docs/QUEUEING.md).
 - Picking a model and thinking budget per job type — see [docs/MODEL-TUNING.md](./docs/MODEL-TUNING.md).
+- Deploying on Linux Mint XFCE — see [docs/LINUX.md](./docs/LINUX.md).

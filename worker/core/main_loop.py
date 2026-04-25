@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import socket
+import sys
 import threading
 import time
 from dataclasses import dataclass
@@ -28,6 +29,8 @@ from worker.observability.events import (
     emit,
 )
 from worker.observability.setup import setup as setup_observability
+from worker.platform import detect_platform
+from worker.platform.base import PreflightError
 from worker.utils.db_url import assert_db_url_is_direct
 from worker.utils.paths import repo_root
 
@@ -65,6 +68,28 @@ def run(opts: RunOptions) -> int:
     setup_observability(cfg.logging, worker_id, opts.instance, cfg=cfg)
     emit(WORKER_STARTED, version=__version__, role=cfg.worker.role, instance=opts.instance)
 
+    # Construct the platform once at startup and reuse it for every job.
+    # preflight() failure is fatal — we must not enter the poll loop with a
+    # broken environment (e.g. Wayland session, missing wmctrl, no DISPLAY).
+    platform = detect_platform(cfg)
+    try:
+        platform.preflight()
+    except PreflightError as e:
+        emit(POLL_LOOP_ERROR, error=f"preflight failed: {e}")
+        print(f"preflight failed: {e}", file=sys.stderr)
+        raise
+
+    # When ad_hoc / handoff job_types are configured, run the extended preflight
+    # (operator MCP isolation, GitHub App, Storage bucket reachability + anon-block,
+    # required server-side RPCs). Same fail-fast policy as the basic preflight.
+    if cfg.dispatch is not None:
+        try:
+            platform.dispatch_preflight(cfg)
+        except PreflightError as e:
+            emit(POLL_LOOP_ERROR, error=f"dispatch preflight failed: {e}")
+            print(f"dispatch preflight failed: {e}", file=sys.stderr)
+            raise
+
     signals.install()
 
     client = PostgrestClient(cfg.db.url, cfg.db.service_key)
@@ -96,7 +121,7 @@ def run(opts: RunOptions) -> int:
                 emit(JOB_CLAIMED, job_id=job["id"], job_type=job.get("job_type"))
                 state.set_current_job(job["id"])
                 try:
-                    orchestration.run(client, cfg, job, worker_id=worker_id)
+                    orchestration.run(client, cfg, job, worker_id=worker_id, platform=platform)
                 finally:
                     state.set_current_job(None)
             except Exception as e:

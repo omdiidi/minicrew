@@ -1,6 +1,12 @@
 #!/bin/bash
 set -euo pipefail
 
+OS="$(uname -s)"
+case "$OS" in
+  Darwin|Linux) ;;
+  *) echo "error: unsupported OS '$OS'. minicrew supports Darwin and Linux only." >&2; exit 1 ;;
+esac
+
 WORKERS=1
 ROLE=primary
 POLL_INTERVAL=""
@@ -22,12 +28,19 @@ chmod 600 .env
 .venv/bin/pip install -q -r requirements.txt
 mkdir -p logs
 
+# Preflight is the single source of truth for "is this machine ready".
+# It reads the config, dispatches to the right platform, and checks everything that platform needs.
+.venv/bin/python -m worker --preflight || { echo "error: preflight failed. Fix the issues above and re-run." >&2; exit 1; }
+
 for i in $(seq 1 "$WORKERS"); do
   if [ -n "$POLL_INTERVAL" ]; then
-    .venv/bin/python -m worker.utils.launchd install --instance "$i" --role "$ROLE" --config-path "$MINICREW_CONFIG_PATH" --poll-interval "$POLL_INTERVAL" --replace-existing
+    .venv/bin/python -m worker.platform install --instance "$i" --role "$ROLE" --config-path "$MINICREW_CONFIG_PATH" --poll-interval "$POLL_INTERVAL" --replace-existing
   else
-    .venv/bin/python -m worker.utils.launchd install --instance "$i" --role "$ROLE" --config-path "$MINICREW_CONFIG_PATH" --replace-existing
+    .venv/bin/python -m worker.platform install --instance "$i" --role "$ROLE" --config-path "$MINICREW_CONFIG_PATH" --replace-existing
   fi
 done
 
-echo "installed $WORKERS worker(s). verify: launchctl list | grep com.minicrew.worker ; tail -f logs/worker-1.log"
+case "$OS" in
+  Darwin) echo "installed $WORKERS worker(s). verify: launchctl list | grep com.minicrew.worker ; tail -f logs/worker-1.log" ;;
+  Linux)  echo "installed $WORKERS worker(s). verify: systemctl --user list-units --all 'minicrew-worker-*' ; tail -f logs/worker-1.log" ;;
+esac

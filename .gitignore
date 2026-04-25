@@ -12,3 +12,5 @@ build/
 *.egg-info/
 .pytest_cache/
 .ruff_cache/
+CLAUDE.local.md
+.mcp.json

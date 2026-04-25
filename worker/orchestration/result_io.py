@@ -21,11 +21,19 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Any
+
+from worker.config.result_validation import ResultRead, validate
 
 
-def read_result_safe(cwd: Path, filename: str) -> Any:
-    """Read and JSON-decode the result file, or return None on any safety/read failure.
+def read_result_safe(
+    cwd: Path,
+    filename: str,
+    schema: dict | None = None,
+) -> ResultRead | None:
+    """Read and JSON-decode the result file, optionally validating against `schema`.
+
+    Returns None on any safety / read failure (caller treats as unreadable). On a
+    successful read, returns a ResultRead from `worker.config.result_validation.validate`.
 
     Order of operations (defense-in-depth):
       1. Open the candidate path with O_NOFOLLOW — a symlink at the final component
@@ -33,7 +41,8 @@ def read_result_safe(cwd: Path, filename: str) -> Any:
       2. Resolve the fd's path (best-effort on macOS via realpath of the candidate
          path; on Linux `/proc/self/fd/<fd>` would be tighter) and verify it sits
          under the session cwd realpath.
-      3. Only then read and JSON-decode.
+      3. Only then read and JSON-decode; pass the decoded value (or the
+         `{"raw": text}` fallback for non-JSON content) through `validate`.
     """
     candidate = cwd / filename
 
@@ -79,7 +88,13 @@ def read_result_safe(cwd: Path, filename: str) -> Any:
         raise
 
     try:
-        return json.loads(text)
+        value = json.loads(text)
     except json.JSONDecodeError:
         # Non-JSON result files are preserved as raw strings so consumers can still inspect them.
-        return {"raw": text}
+        # When no schema is configured, the raw fallback is returned as ok; when a schema
+        # is set, validate() rejects the {"raw": ...} shape with an explanatory error.
+        if schema is None:
+            return ResultRead(ok=True, value={"raw": text}, error=None)
+        return validate({"raw": text}, schema)
+
+    return validate(value, schema)

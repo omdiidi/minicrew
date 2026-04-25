@@ -28,6 +28,45 @@ machines poll every five seconds; secondary machines poll every fifteen. There i
 broadcast channel, and no discovery protocol. A machine goes online by registering a heartbeat
 row and goes offline by missing heartbeats long enough for the reaper to mark it.
 
+## Platform abstraction layer
+
+Everything OS-specific in minicrew hides behind a `Platform` protocol defined in
+`worker/platform/base.py`. The protocol declares `launch_session(cwd) -> SessionHandle`,
+`close_session(handle)`, `preflight()`, and the service-management surface
+(`install_service`, `uninstall_service`, `installed_instances`). Two implementations ship in
+v1: `MacPlatform` (osascript + launchd + Terminal.app) and `LinuxPlatform` (xfce4-terminal or
+tmux + wmctrl/xdotool + systemd user units). `worker/platform/__init__.py:detect_platform`
+picks the right one based on `sys.platform` (`darwin` -> mac, `linux` -> linux, anything else
+-> hard fail at startup); the user can override with an explicit `platform.kind` in
+`config.yaml`.
+
+Preflight is a strict contract. Before the poll loop ever starts, `platform.preflight()`
+must succeed; any required tool missing, wrong session type (Wayland on Linux), or broken
+desktop environment raises `PreflightError` with a remediation message and the worker exits.
+There is no silent fallback — the caller is told exactly what is wrong.
+
+`SessionHandle` is an opaque, serializable record of a live terminal session. It carries a
+`kind` discriminator (`mac`, `linux_xfce4`, `linux_xterm`, `linux_tmux`) and a `data` dict
+with platform-specific identifiers (Terminal.app window id on Mac; PID, PGID, window id, and
+title on Linux; tmux session name in headless mode). The orchestrator, watchdog, and close
+paths never reach into `data` directly — they hand the handle back to `platform.close_session`
+and let the platform interpret it.
+
+In fan-out mode, each group's session handle is persisted to `<group>/_session.json` so the
+shutdown sweep can close every live window on SIGTERM or restart. During the one-release
+upgrade window a legacy `_window_id.txt` is still read (wrapped into a synthetic
+`SessionHandle(kind='mac', data={'window_id': int(...)})`) so an in-flight Mac job does not
+leak its window during a mid-upgrade restart. On Linux, `LinuxPlatform.launch_session` writes
+a `_pending_pid.txt` file holding the PID and PGID **before** entering the wmctrl poll loop;
+orchestration shutdown paths always sweep `_pending_pid.txt` in addition to
+`_session.json` files, so a terminal that opens milliseconds after the worker decides to
+abort is still killed by process group.
+
+The service-management CLI lives at `python -m worker.platform` (subcommands: `install`,
+`uninstall`, `uninstall-all`, `list`). `bash setup.sh` and `bash teardown.sh` delegate to it
+after detecting the OS; there is no OS-specific shell logic in the install path beyond
+dispatching.
+
 ## The job lifecycle
 
 A job begins life when a consumer inserts a row into the `jobs` table with `status='pending'`.
@@ -110,6 +149,137 @@ own identifier. These can only exist if the worker crashed without graceful shut
 row is requeued to `pending` with `worker_id=null` and `started_at=null`, and a
 `startup_requeued` event is emitted. The worker then enters its normal poll loop.
 
+## The ad_hoc lifecycle
+
+`mode: ad_hoc` is the dispatch surface for peer Claude Code sessions: a caller
+pushes a snapshot branch, registers an MCP bundle in Vault, INSERTs a `jobs`
+row with `submitted_by = auth.uid()`, and waits. The worker:
+
+1. **Claim.** `claim_next_job_with_cap` RPC enforces a per-caller cap on
+   simultaneously-running jobs.
+2. **Mint a GitHub App install token.** Cached for clone + push within this job.
+3. **Clone.** `git -c http.extraHeader='Authorization: Bearer <token>' clone …`
+   into `<tmpdir>/repo`. Cancellable via `cancel_check`.
+4. **Origin handling.** If `allow_code_push: false`, `git remote remove origin`.
+   If `true`, pre-create `minicrew/result/<job_id>` so the inner session is on
+   the result branch from launch.
+5. **MCP write.** If `mcp_bundle_id` is set, fetch the Vault row via
+   `vault.decrypted_secrets`, write `<clone>/.claude/settings.json` (mode 0600)
+   containing `{"mcpServers": {...}}`.
+6. **Render.** `render_builtin_ad_hoc` generates the prompt from
+   `worker/builtin_prompts/ad_hoc.md.j2`. Consumers cannot override this template.
+7. **Launch.** Standard `launch_session(cwd)` flow; the runner script tees the
+   session log to `logs/jobs/<job_id>.log` (forced for ad_hoc).
+8. **Side threads.** `ChunkedLogStreamer` uploads log chunks to Storage with a
+   manifest at `<bucket>/<job_id>/manifest.json`; first upload PATCHes
+   `caller_log_url` onto the row. `ProgressTailer` watches `_progress.jsonl`.
+9. **Watch.** Watchdog returns one of `RESULT_COMPLETED`, `RESULT_SHUTDOWN`,
+   `RESULT_CANCELLED`, or a timeout/error string.
+10. **Read + optional push.** `read_result_safe` (with `result_schema`
+    validation) produces a `ResultRead`. If `allow_code_push: true` and the
+    session left commits on the result branch, `push_branch` runs under the
+    cached App token; the resulting SHA is folded into `result.value.git`.
+11. **Cleanup.** Order is load-bearing:
+    - Stop side threads (BEFORE writing terminal status).
+    - Close terminal handle if watchdog didn't.
+    - `cleanup_session_data(<clone>)` wipes
+      `~/.claude/projects/<encoded-clone-path>/`.
+    - `shutil.rmtree(tmpdir)`.
+    - On terminal outcome only: `dispatch_delete_mcp_bundle` and (if
+      configured) Storage prefix delete.
+
+The `bundle_safe_to_delete` flag gates step 11's bundle delete: it is set True
+only on terminal outcomes (completed / error / cancelled). On
+`RESULT_SHUTDOWN` the row is requeued and the bundle is preserved for the next
+attempt.
+
+## The handoff lifecycle
+
+`mode: handoff` resumes an existing local Claude Code session on the worker via
+`claude --resume <session-id> --print`. The end-to-end flow:
+
+```
+caller-side                        worker-side
+-----------                        -----------
+1. snapshot local edits
+2. push minicrew/dispatch/<id>
+3. dispatch_register_mcp_bundle
+4. dispatch_register_transcript_bundle
+   (Vault inline up to vault_inline_cap_bytes;
+    Storage fallback gzipped above that)
+5. INSERT jobs row (mode=handoff)
+                                   6. claim via RPC
+                                   7. mint App token, clone dispatch branch
+                                   8. remove origin OR precreate result branch
+                                   9. write per-job .claude/settings.json (MCP)
+                                  10. fetch_transcript_bundle
+                                      (resolves storage_ref if present)
+                                  11. write to ~/.claude/projects/<encoded>/
+                                       - <session-id>.jsonl
+                                       - <session-id>/subagents/*.jsonl
+                                  12. render_builtin_handoff
+                                      (housekeeping outside if/else;
+                                       user_instruction OR default preamble inside)
+                                  13. write_runner_script_resume:
+                                       claude --resume <id> --print
+                                         --dangerously-skip-permissions
+                                         --model X --effort Y "$(cat _prompt.txt)"
+                                       2>&1 | tee <log>
+                                  14. launch Terminal; start
+                                       ChunkedLogStreamer + ProgressTailer
+                                  15. wait_for_completion (caps caller-supplied
+                                       timeout overrides at max_timeout_seconds)
+                                  16. _try_bundle_outbound:
+                                       read extended <session-id>.jsonl + subagents,
+                                       register_transcript_bundle,
+                                       PATCH final_transcript_bundle_id
+                                  17. optional push of result branch
+                                  18. write jobs.result, mark completed
+                                  19. cleanup: stop streamers, close terminal,
+                                       cleanup_session_data, rmtree, delete MCP +
+                                       inbound transcript (if configured); outbound
+                                       transcript stays under retention
+20. /handoff:reattach <job_id>
+    - dispatch_fetch_outbound_transcript
+    - back up local <session-id>.jsonl
+    - write worker's continued JSONL + subagents
+    - print: claude --resume <session-id>
+```
+
+Cancel checkpoints are inserted after every IO step (clone, branch ops, MCP
+fetch, transcript fetch, transcript write, prompt render, runner write,
+pre-launch). On cancel/timeout/error, `_try_bundle_outbound` is called BEFORE
+`cleanup_session_data` wipes the project directory — so even partial work is
+recoverable via `/handoff:reattach`.
+
+`worker/terminal/launcher.py` is NOT modified for handoff. Single, fan_out, and
+ad_hoc continue to emit byte-identical runner scripts via `write_runner_script`.
+Handoff is the only consumer of `write_runner_script_resume` (in
+`worker/terminal/launcher_resume.py`). This honors the CLAUDE.md load-bearing-file
+rule.
+
+## Worker timeline
+
+Per worker boot, in order:
+
+1. `cli.py` parses args.
+2. Config loaded, validated against `schema/config.schema.json`.
+3. `platform.preflight()` — host readiness (X11 vs Wayland, missing tools,
+   Terminal.app on Mac, etc.). Hard-fails with `PreflightError` on any miss.
+4. **`platform.dispatch_preflight(cfg)`** — only when `cfg.dispatch is not None`.
+   Verifies the GitHub App can mint a token; verifies the Storage bucket exists
+   and is NOT anon-readable; verifies the expected dispatch RPCs exist via
+   `dispatch_check_rpcs(text[])` (returns the subset that are MISSING — empty
+   array means all present).
+5. `startup_recovery` — requeue any `running` rows owned by this worker id.
+6. Heartbeat thread started (30s when idle, 10s when busy).
+7. Reaper thread started (opportunistic, advisory-lock gated).
+8. **Side threads (per-job, dispatch-gated):** `ChunkedLogStreamer` and
+   `ProgressTailer` start at job-launch when `cfg.dispatch is not None`. Both
+   stop BEFORE the orchestrator writes the terminal status (load-bearing — avoids
+   post-state PATCH races).
+9. Poll loop: claim → orchestrate → sleep.
+
 ## File layout
 
 ```
@@ -133,6 +303,12 @@ worker/
     __init__.py            # dispatch on mode
     single_terminal.py     # default mode: one job, one window, one result
     fan_out.py             # N parallel group windows + 1 merge window
+  platform/
+    __init__.py            # detect_platform factory + argparse (install/uninstall/uninstall-all)
+    __main__.py            # python -m worker.platform entrypoint
+    base.py                # Platform protocol + SessionHandle + exceptions
+    mac.py                 # MacPlatform — osascript + launchd
+    linux.py               # LinuxPlatform — xfce4-terminal/tmux + systemd-user
   config/
     loader.py              # YAML + env interpolation + JSON Schema validation
     models.py              # Pydantic-style Config, JobType, ReaperConfig
@@ -149,6 +325,5 @@ worker/
   utils/
     version.py             # read VERSION file
     paths.py               # absolute-path helpers and trust-dialog writer
-    launchd.py             # plist render + install/uninstall
     db_url.py              # validate direct URL; reject pooler hosts
 ```

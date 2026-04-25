@@ -23,6 +23,14 @@ SESSION_LAUNCHED = "session_launched"
 POLL_LOOP_ERROR = "poll_loop_error"
 CONFIG_RELOADED = "config_reloaded"
 STARTUP_REQUEUED = "startup_requeued"
+JOB_CANCELLED = "job_cancelled"
+FAN_OUT_PARTITION_DEPRECATED = "fan_out_partition_deprecated"
+# Emitted by worker.core.reaper:_sweep_dispatch_artifacts on each sweep cycle with
+# {outbound_count, orphan_transcript_count, orphan_mcp_count, duration_seconds}.
+REAPER_SWEPT = "reaper_swept"
+# Emitted by worker.integrations.secret_bundle when a delete-on-completion flag is
+# false and we deliberately retain a vault bundle. Audit trail for retention policy.
+DISPATCH_BUNDLE_RETAINED = "dispatch_bundle_retained"
 
 # Env vars whose values are ALWAYS masked in log output, regardless of config.
 _ALWAYS_REDACT: tuple[str, ...] = ("SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_DB_URL")

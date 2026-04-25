@@ -24,53 +24,22 @@ def claim_next_job(
 ) -> dict | None:
     """Atomically claim the highest-priority pending job for this worker.
 
-    Returns the claimed job dict, or None if no job was available / another worker
-    won the race.
+    Delegates to the SQL RPC `claim_next_job_with_cap`, which enforces the per-caller
+    in-flight cap inside a single transaction. Returns the claimed job dict, or None
+    if no job was available / the caller is at cap / another worker won the race.
     """
-    rows = client.get(
-        cfg.db.jobs_table,
-        status="pending",
-        order="priority.desc,created_at.asc",
-        limit="1",
-        select="*",
+    cap = (cfg.dispatch and cfg.dispatch.max_concurrent_per_caller) or 10
+    rows = client.rpc(
+        "claim_next_job_with_cap",
+        {
+            "p_worker_id": worker_id,
+            "p_version": version,
+            "p_cap": int(cap),
+        },
     )
     if not rows:
         return None
-    job = rows[0]
-
-    expires_at = job.get("expires_at")
-    if expires_at:
-        # The reference parses `...Z` suffixes; .fromisoformat accepts them from 3.11+
-        # but we normalize anyway for older serialization paths.
-        expires = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
-        if expires < datetime.now(UTC):
-            # Filter on status='pending' so we don't race another worker that just claimed
-            # it; set completed_at so worker_stats time-bounded counts register the cancel.
-            client.patch(
-                cfg.db.jobs_table,
-                {"status": "cancelled", "completed_at": _now_iso()},
-                id=job["id"],
-                status="pending",
-            )
-            return None
-
-    # The second filter `status="pending"` is what provides atomicity — if another
-    # worker flipped the row to 'running' between the GET and this PATCH, row count
-    # is zero and we return None.
-    claimed = client.patch(
-        cfg.db.jobs_table,
-        {
-            "status": "running",
-            "worker_id": worker_id,
-            "claimed_at": _now_iso(),
-            "worker_version": version,
-        },
-        id=job["id"],
-        status="pending",
-    )
-    if not claimed:
-        return None
-    return claimed[0]
+    return rows[0]
 
 
 def update_job_status(
@@ -138,6 +107,75 @@ def write_job_result(
         )
         return False
     return True
+
+
+def set_status_cancelled(
+    client: PostgrestClient, cfg: Config, job_id: str, worker_id: str
+) -> bool:
+    """Mark a running job as cancelled by the caller.
+
+    Filters on id+worker_id+status='running' so a completion racing the cancel
+    PATCH cannot be overwritten. Clears `requested_status` so a subsequent claim
+    of a similar id (or a stale read) won't see a lingering cancel signal.
+    Returns True if a row was updated.
+    """
+    rows = client.patch(
+        cfg.db.jobs_table,
+        {
+            "status": "cancelled",
+            "completed_at": _now_iso(),
+            "error_message": "cancelled by caller",
+            "requested_status": None,
+        },
+        id=job_id,
+        worker_id=worker_id,
+        status="running",
+    )
+    return bool(rows)
+
+
+def write_progress(
+    client: PostgrestClient,
+    cfg: Config,
+    job_id: str,
+    worker_id: str,
+    payload: dict,
+) -> bool:
+    """Write a progress JSON payload to the running job's row.
+
+    Filters on id+worker_id+status='running'. Returns False if no row was written
+    (job no longer owned / no longer running), letting the tailer thread exit
+    quietly without raising.
+    """
+    rows = client.patch(
+        cfg.db.jobs_table,
+        {"progress": payload},
+        id=job_id,
+        worker_id=worker_id,
+        status="running",
+    )
+    return bool(rows)
+
+
+def write_final_transcript_bundle_id(
+    client: PostgrestClient,
+    cfg: Config,
+    job_id: str,
+    worker_id: str,
+    bundle_id,
+) -> bool:
+    """Record the final transcript bundle id on a running job's row.
+
+    Filters on id+worker_id+status='running'. Returns True if a row was updated.
+    """
+    rows = client.patch(
+        cfg.db.jobs_table,
+        {"final_transcript_bundle_id": str(bundle_id)},
+        id=job_id,
+        worker_id=worker_id,
+        status="running",
+    )
+    return bool(rows)
 
 
 def requeue_job(

@@ -8,9 +8,10 @@ from worker.observability.events import JOB_FAILED, emit
 
 if TYPE_CHECKING:
     from worker.config.models import Config
+    from worker.platform.base import Platform
 
 
-def run(client, cfg: Config, job: dict, *, worker_id: str) -> None:
+def run(client, cfg: Config, job: dict, *, worker_id: str, platform: Platform) -> None:
     job_type_name = job.get("job_type", "")
     if job_type_name not in cfg.job_types:
         from worker.db.queries import update_job_status
@@ -50,8 +51,16 @@ def run(client, cfg: Config, job: dict, *, worker_id: str) -> None:
     if job_type.mode == "fan_out":
         from worker.orchestration.fan_out import run_fan_out
 
-        run_fan_out(client, cfg, job, job_type, worker_id=worker_id)
+        run_fan_out(client, cfg, job, job_type, worker_id=worker_id, platform=platform)
+    elif job_type.mode == "ad_hoc":
+        from worker.orchestration.ad_hoc import run_ad_hoc
+
+        run_ad_hoc(client, cfg, job, job_type, worker_id=worker_id, platform=platform)
+    elif job_type.mode == "handoff":
+        from worker.orchestration.handoff import run_handoff
+
+        run_handoff(client, cfg, job, job_type, worker_id=worker_id, platform=platform)
     else:
         from worker.orchestration.single_terminal import run_single
 
-        run_single(client, cfg, job, job_type, worker_id=worker_id)
+        run_single(client, cfg, job, job_type, worker_id=worker_id, platform=platform)

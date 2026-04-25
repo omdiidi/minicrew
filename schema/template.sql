@@ -119,3 +119,388 @@ create or replace view worker_stats as
 -- ---------------------------------------------------------------------------
 -- RLS guidance lives in docs/SUPABASE-SCHEMA.md. Schema ships with RLS OFF.
 -- ---------------------------------------------------------------------------
+
+-- ===========================================================================
+-- v2 (Phase 2a) — remote sub-agent foundations.
+-- Mirrors schema/migrations/002_remote_subagent.sql for fresh installs.
+-- Idempotent: safe to apply alongside the migration on existing databases.
+-- ===========================================================================
+
+BEGIN;
+
+-- Identity: drop enqueued_by, add submitted_by uuid.
+alter table jobs drop column if exists enqueued_by;
+alter table jobs add column if not exists submitted_by uuid;
+create index if not exists jobs_submitted_by_status_idx
+  on jobs (submitted_by, status) where status = 'running';
+
+-- New columns
+alter table jobs add column if not exists requested_status text
+  check (requested_status is null or requested_status in ('cancel'));
+alter table jobs add column if not exists progress jsonb;
+alter table jobs add column if not exists caller_log_url text;
+alter table jobs add column if not exists mcp_bundle_id uuid;
+
+-- Cancel-sweep trigger: pending + requested_status='cancel' -> cancelled immediately.
+create or replace function sweep_cancel_pending() returns trigger language plpgsql as $$
+begin
+  if new.status = 'pending' and new.requested_status = 'cancel' then
+    new.status := 'cancelled';
+    new.completed_at := now();
+    new.error_message := 'cancelled before claim';
+  end if;
+  return new;
+end;
+$$;
+drop trigger if exists trg_sweep_cancel_pending on jobs;
+create trigger trg_sweep_cancel_pending before insert or update on jobs
+  for each row execute function sweep_cancel_pending();
+
+-- Atomic claim with per-caller cap (replaces the GET+PATCH dance).
+create or replace function claim_next_job_with_cap(
+  p_worker_id text, p_version text, p_cap int default 10
+) returns setof jobs language plpgsql as $$
+declare
+  v_job jobs%rowtype;
+begin
+  select * into v_job from jobs
+   where status = 'pending'
+     and (requested_status is null)
+     and (
+       submitted_by is null
+       or (select count(*) from jobs j2
+             where j2.submitted_by = jobs.submitted_by
+               and j2.status = 'running') < p_cap
+     )
+   order by priority desc, created_at asc
+   for update skip locked
+   limit 1;
+
+  if not found then return; end if;
+
+  if v_job.expires_at is not null and v_job.expires_at < now() then
+    update jobs set status='cancelled', completed_at=now()
+     where id=v_job.id;
+    return;
+  end if;
+
+  update jobs set
+    status='running',
+    worker_id=p_worker_id,
+    claimed_at=now(),
+    worker_version=p_version
+   where id=v_job.id
+   returning * into v_job;
+
+  return next v_job;
+end;
+$$;
+revoke all on function claim_next_job_with_cap(text, text, int) from public;
+
+-- Vault RPCs.
+create or replace function dispatch_register_mcp_bundle(p_secret jsonb)
+  returns uuid language plpgsql security definer set search_path = vault, public as $$
+declare v_id uuid;
+begin
+  v_id := vault.create_secret(p_secret::text, 'minicrew_mcp_' || gen_random_uuid()::text, 'minicrew ad_hoc MCP bundle');
+  return v_id;
+end;
+$$;
+revoke all on function dispatch_register_mcp_bundle(jsonb) from public;
+grant execute on function dispatch_register_mcp_bundle(jsonb) to authenticated;
+
+create or replace function dispatch_delete_mcp_bundle(p_id uuid)
+  returns void language plpgsql security definer set search_path = vault, public as $$
+begin
+  delete from vault.secrets where id = p_id;
+end;
+$$;
+revoke all on function dispatch_delete_mcp_bundle(uuid) from public;
+
+-- SECURITY DEFINER bridge so the worker can fetch the decrypted MCP bundle
+-- without exposing `vault` schema in PostgREST. service_role only.
+create or replace function dispatch_fetch_mcp_bundle(p_id uuid)
+  returns text language plpgsql security definer set search_path = vault, public as $$
+declare
+  v_secret text;
+begin
+  select decrypted_secret into v_secret from vault.decrypted_secrets where id = p_id;
+  if v_secret is null then
+    raise exception 'mcp bundle % not found', p_id using errcode = 'no_data_found';
+  end if;
+  return v_secret;
+end;
+$$;
+revoke all on function dispatch_fetch_mcp_bundle(uuid) from public;
+grant execute on function dispatch_fetch_mcp_bundle(uuid) to service_role;
+
+-- RLS
+alter table jobs enable row level security;
+
+drop policy if exists jobs_caller_select on jobs;
+create policy jobs_caller_select on jobs
+  for select using (auth.uid() = submitted_by);
+
+drop policy if exists jobs_caller_insert on jobs;
+create policy jobs_caller_insert on jobs
+  for insert with check (
+    auth.uid() = submitted_by
+    and status = 'pending'
+    and worker_id is null
+    and result is null
+    and started_at is null
+    and claimed_at is null
+    and mcp_bundle_id is null
+  );
+
+drop policy if exists jobs_caller_update on jobs;
+create policy jobs_caller_update on jobs
+  for update using (auth.uid() = submitted_by) with check (auth.uid() = submitted_by);
+
+create or replace function enforce_caller_update_columns() returns trigger language plpgsql as $$
+begin
+  if current_user in ('service_role', 'postgres') or session_user in ('service_role', 'postgres') then
+    return new;
+  end if;
+  if (new.id, new.job_type, new.status, new.priority, new.worker_id, new.claimed_at,
+      new.started_at, new.completed_at, new.expires_at, new.attempt_count, new.max_attempts,
+      new.requires, new.payload, new.result, new.error_message, new.submitted_by,
+      new.progress, new.caller_log_url, new.mcp_bundle_id, new.worker_version)
+   is distinct from
+     (old.id, old.job_type, old.status, old.priority, old.worker_id, old.claimed_at,
+      old.started_at, old.completed_at, old.expires_at, old.attempt_count, old.max_attempts,
+      old.requires, old.payload, old.result, old.error_message, old.submitted_by,
+      old.progress, old.caller_log_url, old.mcp_bundle_id, old.worker_version)
+  then
+    raise exception 'callers may only update requested_status';
+  end if;
+  return new;
+end;
+$$;
+drop trigger if exists trg_enforce_caller_update_columns on jobs;
+create trigger trg_enforce_caller_update_columns before update on jobs
+  for each row execute function enforce_caller_update_columns();
+
+-- Vault read access
+grant usage on schema vault to service_role;
+grant select on vault.decrypted_secrets to service_role;
+
+-- Storage bucket
+insert into storage.buckets (id, name, public)
+  values ('minicrew-logs', 'minicrew-logs', false)
+  on conflict do nothing;
+
+COMMIT;
+
+-- ===========================================================================
+-- v3 (Phase 3) — handoff foundations.
+-- Mirrors schema/migrations/003_handoff.sql for fresh installs.
+-- Idempotent: safe to re-apply.
+-- ===========================================================================
+
+BEGIN;
+
+-- Outbound transcript bundle column + indexes.
+alter table jobs add column if not exists final_transcript_bundle_id uuid;
+
+create unique index if not exists jobs_final_transcript_bundle_id_uq
+  on jobs (final_transcript_bundle_id)
+  where final_transcript_bundle_id is not null;
+
+create index if not exists jobs_payload_transcript_bundle_id_idx
+  on jobs ((payload->>'transcript_bundle_id'))
+  where payload ? 'transcript_bundle_id';
+
+-- Re-create caller insert policy to also forbid final_transcript_bundle_id at insert.
+drop policy if exists jobs_caller_insert on jobs;
+create policy jobs_caller_insert on jobs
+  for insert with check (
+    auth.uid() = submitted_by
+    and status = 'pending'
+    and worker_id is null
+    and result is null
+    and started_at is null
+    and claimed_at is null
+    and mcp_bundle_id is null
+    and final_transcript_bundle_id is null
+  );
+
+-- Caller-callable: attach bundle pointers AFTER insert via SECURITY DEFINER
+-- (bypasses enforce_caller_update_columns). Verifies caller owns row + still pending.
+create or replace function dispatch_attach_bundles(
+  p_job_id uuid,
+  p_mcp_bundle_id uuid,
+  p_transcript_bundle_id uuid default null
+) returns void language plpgsql security definer set search_path = public as $$
+declare
+  v_owner uuid;
+begin
+  select submitted_by into v_owner from jobs
+   where id = p_job_id and status = 'pending'
+   for update;
+  if v_owner is null then
+    raise exception 'job % not found or not pending', p_job_id;
+  end if;
+  if v_owner is distinct from auth.uid() then
+    raise exception 'not authorized to attach bundles to job %', p_job_id;
+  end if;
+  update jobs set
+    mcp_bundle_id = coalesce(p_mcp_bundle_id, mcp_bundle_id),
+    payload = case
+      when p_transcript_bundle_id is not null
+      then payload || jsonb_build_object('transcript_bundle_id', p_transcript_bundle_id::text)
+      else payload
+    end
+   where id = p_job_id;
+end;
+$$;
+revoke all on function dispatch_attach_bundles(uuid, uuid, uuid) from public;
+grant execute on function dispatch_attach_bundles(uuid, uuid, uuid) to authenticated;
+
+-- Re-create the column-restriction trigger function with final_transcript_bundle_id
+-- included in BOTH tuple sides. Trigger from v2 stays attached.
+create or replace function enforce_caller_update_columns() returns trigger language plpgsql as $$
+begin
+  if current_user in ('service_role', 'postgres') or session_user in ('service_role', 'postgres') then
+    return new;
+  end if;
+  if (new.id, new.job_type, new.status, new.priority, new.worker_id, new.claimed_at,
+      new.started_at, new.completed_at, new.expires_at, new.attempt_count, new.max_attempts,
+      new.requires, new.payload, new.result, new.error_message, new.submitted_by,
+      new.progress, new.caller_log_url, new.mcp_bundle_id, new.worker_version,
+      new.final_transcript_bundle_id)
+   is distinct from
+     (old.id, old.job_type, old.status, old.priority, old.worker_id, old.claimed_at,
+      old.started_at, old.completed_at, old.expires_at, old.attempt_count, old.max_attempts,
+      old.requires, old.payload, old.result, old.error_message, old.submitted_by,
+      old.progress, old.caller_log_url, old.mcp_bundle_id, old.worker_version,
+      old.final_transcript_bundle_id)
+  then
+    raise exception 'callers may only update requested_status';
+  end if;
+  return new;
+end;
+$$;
+
+-- Caller-callable: register an inbound transcript bundle (with server-side size guard).
+create or replace function dispatch_register_transcript_bundle(p_secret jsonb)
+  returns uuid language plpgsql security definer set search_path = vault, public as $$
+declare
+  v_id uuid;
+  v_size int;
+  v_max int := 10485760;  -- 10 MB; keep in sync with cfg.dispatch.handoff.max_transcript_bundle_bytes
+begin
+  v_size := octet_length(p_secret::text);
+  if v_size > v_max then
+    raise exception 'transcript bundle size % exceeds max %', v_size, v_max;
+  end if;
+  v_id := vault.create_secret(
+    p_secret::text,
+    'minicrew_transcript_' || gen_random_uuid()::text,
+    'minicrew handoff transcript bundle (inbound or outbound)'
+  );
+  return v_id;
+end;
+$$;
+revoke all on function dispatch_register_transcript_bundle(jsonb) from public;
+grant execute on function dispatch_register_transcript_bundle(jsonb) to authenticated;
+
+-- Caller-callable: fetch an OUTBOUND transcript for a job they own (keyed by job_id).
+create or replace function dispatch_fetch_outbound_transcript(p_job_id uuid)
+  returns jsonb language plpgsql security definer set search_path = vault, public as $$
+declare
+  v_owner uuid;
+  v_bundle_id uuid;
+  v_secret text;
+begin
+  select submitted_by, final_transcript_bundle_id
+    into v_owner, v_bundle_id
+    from jobs where id = p_job_id;
+  if v_owner is null then
+    raise exception 'job % not found', p_job_id;
+  end if;
+  if v_owner is distinct from auth.uid() then
+    raise exception 'not authorized to fetch transcript for job %', p_job_id;
+  end if;
+  if v_bundle_id is null then
+    raise exception 'job % has no outbound transcript bundle (not yet completed?)', p_job_id;
+  end if;
+  select decrypted_secret into v_secret from vault.decrypted_secrets where id = v_bundle_id;
+  if v_secret is null then
+    raise exception 'transcript bundle missing or expired';
+  end if;
+  return v_secret::jsonb;
+end;
+$$;
+revoke all on function dispatch_fetch_outbound_transcript(uuid) from public;
+grant execute on function dispatch_fetch_outbound_transcript(uuid) to authenticated;
+
+-- Worker-only: delete a transcript bundle (any direction).
+create or replace function dispatch_delete_transcript_bundle(p_id uuid)
+  returns void language plpgsql security definer set search_path = vault, public as $$
+begin
+  delete from vault.secrets where id = p_id;
+end;
+$$;
+revoke all on function dispatch_delete_transcript_bundle(uuid) from public;
+
+-- SECURITY DEFINER bridge so the worker can fetch the inbound transcript
+-- bundle without exposing `vault` schema in PostgREST. service_role only.
+create or replace function dispatch_fetch_transcript_bundle(p_id uuid)
+  returns text language plpgsql security definer set search_path = vault, public as $$
+declare
+  v_secret text;
+begin
+  select decrypted_secret into v_secret from vault.decrypted_secrets where id = p_id;
+  if v_secret is null then
+    raise exception 'transcript bundle % not found', p_id using errcode = 'no_data_found';
+  end if;
+  return v_secret;
+end;
+$$;
+revoke all on function dispatch_fetch_transcript_bundle(uuid) from public;
+grant execute on function dispatch_fetch_transcript_bundle(uuid) to service_role;
+
+-- Preflight RPC: returns the subset of given function names that are MISSING.
+create or replace function dispatch_check_rpcs(p_names text[])
+  returns text[] language plpgsql security definer set search_path = pg_catalog, public as $$
+declare
+  v_missing text[] := array[]::text[];
+  v_name text;
+begin
+  foreach v_name in array p_names loop
+    if not exists (select 1 from pg_proc where proname = v_name) then
+      v_missing := array_append(v_missing, v_name);
+    end if;
+  end loop;
+  return v_missing;
+end;
+$$;
+revoke all on function dispatch_check_rpcs(text[]) from public;
+grant execute on function dispatch_check_rpcs(text[]) to service_role;
+
+-- Helper views for the orphan-bundle reaper sweeps.
+create or replace view v_orphan_transcript_bundles as
+  select s.id, s.created_at
+    from vault.secrets s
+   where s.name like 'minicrew_transcript_%'
+     and not exists (
+       select 1 from jobs j
+        where j.final_transcript_bundle_id = s.id
+           or (j.payload->>'transcript_bundle_id')::uuid = s.id
+     );
+revoke all on v_orphan_transcript_bundles from public;
+grant select on v_orphan_transcript_bundles to service_role;
+
+create or replace view v_orphan_mcp_bundles as
+  select s.id, s.created_at
+    from vault.secrets s
+   where s.name like 'minicrew_mcp_%'
+     and not exists (
+       select 1 from jobs j
+        where j.mcp_bundle_id = s.id
+     );
+revoke all on v_orphan_mcp_bundles from public;
+grant select on v_orphan_mcp_bundles to service_role;
+
+COMMIT;

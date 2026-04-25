@@ -8,6 +8,16 @@ prose register. Invariants to preserve: `SUPABASE_DB_URL` must be the direct 543
 consumer ships a `worker-config/` directory, and skills install into `~/.claude/commands/minicrew/`.
 Everything else is narrative.
 
+## Prerequisites matrix
+
+| OS                | Required binaries                                           | Required services     |
+|-------------------|-------------------------------------------------------------|-----------------------|
+| macOS             | `claude`, `osascript` (built-in)                            | `launchd` (built-in)  |
+| Linux Mint XFCE   | `claude`, `wmctrl`, `xdotool`, `xfce4-terminal`, `tmux`     | `systemd` (user bus)  |
+
+For the Mint-specific runbook (LightDM auto-login, X11 session selection, systemd user unit
+environment, logrotate, `MINICREW_TMPDIR`), see `docs/LINUX.md`.
+
 ## What you're setting up
 
 A minicrew deployment is a small fleet of Mac Minis that run Claude Code sessions on your

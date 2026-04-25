@@ -103,6 +103,14 @@ class PostgrestClient:
         resp.raise_for_status()
         return resp.json() if resp.content else []
 
+    def rpc(self, function_name: str, params: dict) -> list[dict]:
+        resp = self._client.post(
+            f"{self._url}/rest/v1/rpc/{function_name}",
+            json=params,
+        )
+        resp.raise_for_status()
+        return resp.json() if resp.content else []
+
     def delete(self, table: str, **filters: Any) -> None:
         headers = {**self._headers, "Prefer": "return=minimal"}
         params = dict(_process_filter(k, v) for k, v in filters.items())

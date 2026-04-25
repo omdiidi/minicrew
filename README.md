@@ -2,12 +2,13 @@
 
 # minicrew
 
-**A fleet of visible, unattended Claude Code sessions running on your Mac Minis.**
+**minicrew runs on Mac Minis and Linux Mint XFCE boxes.** A fleet of visible, unattended
+Claude Code sessions.
 
 *Queue-driven. Self-healing. Zero-terminal setup.*
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
-[![Platform: macOS](https://img.shields.io/badge/platform-macOS-lightgrey.svg)](#requirements)
+[![Runs on: macOS | Linux Mint XFCE](https://img.shields.io/badge/runs%20on-macOS%20%7C%20Linux%20Mint%20XFCE-lightgrey.svg)](#requirements)
 [![Python: 3.11+](https://img.shields.io/badge/python-3.11+-green.svg)](./requirements.txt)
 [![Status: v0.1.0](https://img.shields.io/badge/status-v0.1.0-orange.svg)](https://github.com/omdiidi/minicrew/releases)
 
@@ -209,6 +210,7 @@ minicrew/
 | Setting up a Mac Mini                   | [SETUP.md](./SETUP.md) (Claude-executable)                    |
 | Wiring a consumer project               | [INTEGRATE.md](./INTEGRATE.md) (agent-consumable)             |
 | How the engine works                    | [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)                |
+| Deploying on Linux Mint XFCE            | [docs/LINUX.md](./docs/LINUX.md)                              |
 | Queue priority, multi-machine, reaper   | [docs/QUEUEING.md](./docs/QUEUEING.md)                        |
 | Single vs fan-out mode                  | [docs/ORCHESTRATION.md](./docs/ORCHESTRATION.md)              |
 | Tuning model + thinking budget          | [docs/MODEL-TUNING.md](./docs/MODEL-TUNING.md)                |
@@ -221,10 +223,26 @@ minicrew/
 
 ## Requirements
 
-- macOS (any Mac — the Mac Mini is just the canonical deployment target)
-- Python 3.11+
-- Claude Code (`npm install -g @anthropic-ai/claude-code`) authenticated on the machine
-- A Supabase project (free tier is fine for development)
+| OS                | Required binaries                                           | Required services     |
+| ----------------- | ----------------------------------------------------------- | --------------------- |
+| macOS             | `claude`, `osascript` (built-in)                            | `launchd` (built-in)  |
+| Linux Mint XFCE   | `claude`, `wmctrl`, `xdotool`, `xfce4-terminal`, `tmux`     | `systemd` (user bus)  |
+
+- Python 3.11+ on either OS.
+- Claude Code (`npm install -g @anthropic-ai/claude-code`) authenticated on the machine.
+- A Supabase project (free tier is fine for development).
+
+### What's different on Linux
+
+minicrew on Linux mirrors the Mac Mini pattern — same Python engine, same Supabase schema,
+same atomic-claim + reaper + watchdog behavior. What changes is the platform-abstracted
+backend: instead of osascript + launchd + Terminal.app, the Linux build uses `xfce4-terminal`
+(or `tmux` headlessly) + `wmctrl`/`xdotool` + systemd user units. Everything OS-specific
+lives behind the `Platform` protocol in `worker/platform/`; mixed-OS fleets coordinate
+through the same database with no special configuration. Mint-specific setup (LightDM
+auto-login, X11 session selection, systemd unit environment, logrotate with `copytruncate`,
+`MINICREW_TMPDIR` for tmpfs pressure, the X11 threat model and dedicated-user
+recommendation) is covered in [docs/LINUX.md](./docs/LINUX.md).
 
 ---
 

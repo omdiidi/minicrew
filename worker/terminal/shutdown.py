@@ -1,53 +1,15 @@
-"""Clean teardown of Terminal.app sessions + ~/.claude session data sweep.
+"""Claude session-data cleanup (`~/.claude/projects` + `~/.claude/session-env` sweep).
 
-Ported from the reference implementation (lines 200-262), including the session-env
-time-based sweep from lines 250-261 (explicitly preserved per plan).
+Terminal-window teardown lives in `worker.platform.<os>.close_session` — this module
+only handles the cross-platform filesystem cleanup that runs after a session ends.
 """
 from __future__ import annotations
 
 import os
 import shutil
-import subprocess
 import sys
 import time
 from pathlib import Path
-
-
-def exit_claude_and_close_window(window_id: int) -> None:
-    """Send `/exit` to the Claude prompt, wait for graceful shutdown, close the window.
-
-    `/exit` is Claude Code's built-in clean shutdown; SIGTERM against the process leaves
-    zombies and pops dialogs. Verified chain: /exit -> Claude exits -> shell `exit 0` ->
-    [Process completed] -> window closes with no dialog.
-    """
-    try:
-        subprocess.run(
-            [
-                "osascript",
-                "-e",
-                f'tell application "Terminal"\n    do script "/exit" in tab 1 of window id {window_id}\nend tell\n',
-            ],
-            capture_output=True,
-            timeout=10,
-        )
-    except (subprocess.TimeoutExpired, OSError) as e:
-        print(f"[shutdown] /exit send failed (window may be gone): {e}", file=sys.stderr)
-
-    # Wait for the exit chain: /exit -> Claude exits -> _run.sh finishes -> exit 0 -> shell exits.
-    time.sleep(5)
-
-    try:
-        subprocess.run(
-            [
-                "osascript",
-                "-e",
-                f'tell application "Terminal" to close window id {window_id} saving no',
-            ],
-            capture_output=True,
-            timeout=10,
-        )
-    except (subprocess.TimeoutExpired, OSError) as e:
-        print(f"[shutdown] window close failed (may already be closed): {e}", file=sys.stderr)
 
 
 def cleanup_session_data(cwd: str | Path) -> None:

@@ -28,6 +28,12 @@ worker shows up in `workers` table heartbeats within thirty seconds. No inter-ma
 communication exists and none is needed — every worker coordinates via the shared Postgres
 database.
 
+Mixed-OS fleets are supported. Macs and Linux Mints coordinate through the same Supabase
+database via the shared `jobs` + `workers` tables; each worker process uses its own platform
+backend (osascript + launchd on Mac, xfce4-terminal + systemd on Linux). No special
+configuration is needed for heterogeneous fleets beyond ensuring each box meets its
+OS-specific prerequisites — see `docs/LINUX.md` for the Mint deep-dive.
+
 ## Multi-instance per machine
 
 Each Mac Mini supports 1..5 worker instances, supervised by launchd. Each instance is an

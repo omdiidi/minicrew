@@ -1,6 +1,6 @@
 # minicrew
 
-> Generic Claude Code worker template for Mac Mini fleets. Queue-driven, zero-terminal setup.
+> Generic Claude Code worker template for Mac Mini and Linux Mint XFCE fleets. Queue-driven, zero-terminal setup.
 
 Entry points for AI agents:
 
@@ -11,6 +11,7 @@ Entry points for AI agents:
 Deep-dive docs:
 
 - [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md): Runtime topology, engine internals.
+- [docs/LINUX.md](./docs/LINUX.md): Linux Mint XFCE deployment runbook (LightDM, X11, systemd-user, logrotate, MINICREW_TMPDIR).
 - [docs/CONFIG-REFERENCE.md](./docs/CONFIG-REFERENCE.md): Every config.yaml field.
 - [docs/SUPABASE-SCHEMA.md](./docs/SUPABASE-SCHEMA.md): Database schema + RLS guidance.
 - [docs/QUEUEING.md](./docs/QUEUEING.md): Priority, reaper, multi-machine.

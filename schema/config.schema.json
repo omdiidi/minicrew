@@ -96,7 +96,7 @@
           "type": "object",
           "description": "Configuration for one job type.",
           "additionalProperties": false,
-          "required": ["mode", "model", "thinking_budget", "timeout_seconds", "prompt_template", "result_filename"],
+          "required": ["mode", "model", "thinking_budget", "timeout_seconds", "result_filename"],
           "properties": {
             "description": {
               "type": "string",
@@ -104,8 +104,8 @@
             },
             "mode": {
               "type": "string",
-              "enum": ["single", "fan_out"],
-              "description": "Orchestration mode. 'single' runs one Terminal session per job. 'fan_out' runs N group sessions in parallel plus one merge session."
+              "enum": ["single", "fan_out", "ad_hoc", "handoff"],
+              "description": "Orchestration mode. 'single' runs one Terminal session per job. 'fan_out' runs N group sessions in parallel plus one merge session. 'ad_hoc' runs a remote peer Claude Code session against a cloned repo (requires top-level dispatch block). 'handoff' resumes a remote Claude Code session via claude --resume (requires top-level dispatch.handoff block)."
             },
             "skill": {
               "description": "Optional Claude Code skill invocation (e.g. 'my_plugin:summarize') prefixed to the rendered prompt.",
@@ -169,6 +169,10 @@
                     "type": "string",
                     "pattern": "^[A-Za-z0-9._-]+$",
                     "description": "Name of the file this group's Claude session is expected to write."
+                  },
+                  "result_schema": {
+                    "type": "object",
+                    "description": "Optional inline JSON Schema validated against this group's parsed JSON result. Non-JSON results bypass validation by design."
                   }
                 }
               }
@@ -188,31 +192,194 @@
                   "type": "string",
                   "pattern": "^[A-Za-z0-9._-]+$",
                   "description": "Final result filename produced by the merge session. Written into jobs.result."
+                },
+                "result_schema": {
+                  "type": "object",
+                  "description": "Optional inline JSON Schema validated against the merge step's parsed JSON result. Non-JSON results bypass validation by design."
                 }
               }
+            },
+            "partition": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["key", "strategy"],
+              "description": "Fan-out mode only: how to split a payload list across groups. 'key' is a dotted path into payload (e.g. 'documents'); 'strategy' is 'chunks' (round-robin remainder split) or 'copies' (each group sees all items).",
+              "properties": {
+                "key": {"type": "string"},
+                "strategy": {"type": "string", "enum": ["chunks", "copies"]}
+              }
+            },
+            "result_schema": {
+              "type": "object",
+              "description": "Optional inline JSON Schema validated against the parsed JSON result. Non-JSON results bypass validation by design (see docs/PROMPTS.md)."
             }
           },
           "oneOf": [
             {
-              "description": "single mode: no groups, no merge.",
+              "description": "single mode: no groups, no merge, no partition; prompt_template required.",
               "properties": {
                 "mode": {"const": "single"}
               },
+              "required": ["prompt_template"],
               "not": {
                 "anyOf": [
                   {"required": ["groups"]},
-                  {"required": ["merge"]}
+                  {"required": ["merge"]},
+                  {"required": ["partition"]}
                 ]
               }
             },
             {
-              "description": "fan_out mode: groups (>=1) and merge both required.",
+              "description": "fan_out mode: groups (>=1) and merge both required; prompt_template required.",
               "properties": {
                 "mode": {"const": "fan_out"}
               },
-              "required": ["groups", "merge"]
+              "required": ["prompt_template", "groups", "merge"]
+            },
+            {
+              "description": "ad_hoc mode: peer Claude Code session against a cloned repo. result_filename required; no groups/merge/partition/skill/prompt_template.",
+              "properties": {
+                "mode": {"const": "ad_hoc"}
+              },
+              "required": ["result_filename"],
+              "not": {
+                "anyOf": [
+                  {"required": ["groups"]},
+                  {"required": ["merge"]},
+                  {"required": ["partition"]},
+                  {"required": ["skill"]},
+                  {"required": ["prompt_template"]}
+                ]
+              }
+            },
+            {
+              "description": "handoff mode: resume a remote Claude Code session via claude --resume. result_filename required; no prompt_template/skill/groups/merge/partition.",
+              "properties": {
+                "mode": {"const": "handoff"}
+              },
+              "required": ["result_filename"],
+              "not": {
+                "anyOf": [
+                  {"required": ["prompt_template"]},
+                  {"required": ["skill"]},
+                  {"required": ["groups"]},
+                  {"required": ["merge"]},
+                  {"required": ["partition"]}
+                ]
+              }
             }
           ]
+        }
+      }
+    },
+    "platform": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Optional platform-specific configuration. If omitted, `kind` defaults to 'auto' (detect via sys.platform) and Linux gets all default values.",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["auto", "mac", "linux"],
+          "default": "auto",
+          "description": "Force a specific platform backend. 'auto' picks MacPlatform on darwin and LinuxPlatform on linux."
+        },
+        "linux": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Linux-specific tunables. Ignored when platform.kind resolves to 'mac'.",
+          "properties": {
+            "display_mode": {
+              "type": "string",
+              "enum": ["visible", "tmux"],
+              "default": "visible",
+              "description": "'visible' uses xfce4-terminal (or xterm) + X11. 'tmux' runs detached, no X11 required."
+            },
+            "terminal_emulator": {
+              "type": "string",
+              "enum": ["xfce4-terminal", "xterm"],
+              "default": "xfce4-terminal",
+              "description": "Which terminal emulator to launch. Only xfce4-terminal and xterm are supported in v1."
+            },
+            "window_open_timeout_seconds": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 15,
+              "description": "How long to poll wmctrl for the spawned window to appear before declaring launch failure."
+            },
+            "exit_grace_seconds": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 30,
+              "description": "After sending /exit to Claude, how long to wait for graceful shutdown before SIGTERM."
+            },
+            "sigterm_to_sigkill_seconds": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 9,
+              "description": "Grace between SIGTERM and SIGKILL of the terminal process group."
+            }
+          }
+        }
+      }
+    },
+    "dispatch": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Optional remote-dispatch configuration. Required when any job_type has mode 'ad_hoc' or 'handoff'. Absent in pure-batch installs (zero new threads, zero new HTTP calls).",
+      "properties": {
+        "max_concurrent_per_caller": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 10,
+          "description": "Per-caller concurrency cap enforced atomically inside claim_next_job_with_cap."
+        },
+        "github_app": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["app_id", "private_key_env", "installation_id_env"],
+          "description": "GitHub App credentials used to clone (and optionally push to) caller-supplied repositories.",
+          "properties": {
+            "app_id": {"type": "string"},
+            "private_key_env": {"type": "string"},
+            "installation_id_env": {"type": "string"},
+            "clone_timeout_seconds": {"type": "integer", "default": 300}
+          }
+        },
+        "log_storage": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["bucket"],
+          "description": "Supabase Storage bucket used for chunk-rotated transcripts (and Phase 3 outbound transcript bundle fallbacks).",
+          "properties": {
+            "bucket": {"type": "string", "default": "minicrew-logs"},
+            "chunk_bytes": {"type": "integer", "default": 262144},
+            "chunk_interval_seconds": {"type": "integer", "default": 5},
+            "delete_logs_on_completion": {"type": "boolean", "default": false},
+            "retention_days": {"type": "integer", "default": 7}
+          }
+        },
+        "mcp_bundle": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Vault-backed MCP bundle settings for ad_hoc dispatch.",
+          "properties": {
+            "decrypted_view": {"type": "string", "default": "vault.decrypted_secrets"},
+            "register_rpc": {"type": "string", "default": "dispatch_register_mcp_bundle"},
+            "delete_rpc": {"type": "string", "default": "dispatch_delete_mcp_bundle"},
+            "delete_mcp_on_completion": {"type": "boolean", "default": true}
+          }
+        },
+        "handoff": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Handoff (mode: handoff) settings. REQUIRED when any job_type has mode 'handoff'; the loader hard-errors with no silent default.",
+          "properties": {
+            "outbound_retention_days": {"type": "integer", "default": 7},
+            "max_transcript_bundle_bytes": {"type": "integer", "default": 10485760},
+            "vault_inline_cap_bytes": {"type": "integer", "default": 524288},
+            "max_timeout_seconds": {"type": "integer", "default": 86400},
+            "delete_inbound_on_completion": {"type": "boolean", "default": true}
+          }
         }
       }
     },

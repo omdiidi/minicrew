@@ -131,6 +131,27 @@ script no longer touches paths outside the session cwd. If a consumer needs file
 inside a session cwd, the enqueuer should write them into the payload or the engine entrypoint
 should copy them explicitly.
 
+## Platform-opaque session handles
+
+Session handles are platform-opaque. The orchestrator gets back a `SessionHandle` with a
+`kind` discriminator (`mac`, `linux_xfce4`, `linux_xterm`, `linux_tmux`) and a `data` dict
+of platform-specific identifiers; the watchdog and close paths never interpret the contents —
+they hand the handle back to `platform.close_session` and let the platform act on it.
+
+In fan-out mode each group's handle is persisted as `_session.json` in that group's cwd, so a
+SIGTERM or crash-restart can reopen the file and close every live session during the shutdown
+sweep. Legacy `_window_id.txt` (Mac-only, pre-platform-layer) is still read during the
+one-release upgrade window and wrapped into a synthetic `SessionHandle(kind='mac', data={
+'window_id': int(...)})` — this prevents leaked Terminal.app windows if a worker restarts
+mid-upgrade with an in-flight Mac job. After one release the legacy fallback goes away.
+
+On Linux, `LinuxPlatform.launch_session` writes `_pending_pid.txt` (two lines: PID, PGID)
+into the session cwd **before** entering the wmctrl poll loop. Orchestration shutdown paths
+always sweep `_pending_pid.txt` in addition to closing registered handles, so a terminal that
+opens milliseconds after the worker decides to abort still gets killed by process group. This
+closes the mid-launch SIGTERM race that would otherwise leak an xfce4-terminal + bash + claude
+subtree to the systemd user manager.
+
 ## Failure modes
 
 If a group terminal times out or errors, the engine records the failure for that group and
@@ -139,6 +160,71 @@ handle a partial set of inputs gracefully — typically by noting which groups a
 producing a best-effort result. If every group fails, the merge still runs but will likely
 produce an error; this is acceptable. If the merge terminal itself times out or errors, the
 job as a whole is recorded as `error`; partial group outputs are not used.
+
+## Partition strategies
+
+A fan_out job type can declare an optional `partition` block to control how a list
+inside `payload` is split across the configured groups:
+
+```yaml
+job_types:
+  analyze_document:
+    mode: fan_out
+    partition:
+      key: sections        # dotted path into payload (e.g. "data.items")
+      strategy: chunks     # "chunks" or "copies"
+    groups: [...]
+    merge: {...}
+```
+
+| Strategy | Behavior | Group template variable values |
+|----------|----------|--------------------------------|
+| `chunks` | Even-ish split. With 7 items / 3 groups: `[3, 2, 2]` (`divmod` remainder distributes left-to-right). | `group.items = [0,1,2]`, `group.partition_items = ["a","b","c"]` |
+| `copies` | Every group sees every item. | `group.items = [0..n-1]`, `group.partition_items = <full list>` |
+
+Each group's prompt template receives:
+
+- `group.document_indices` — back-compat key, identical to `group.items`. Existing
+  templates that key on this keep working.
+- `group.items` — list of integer indices into `payload[partition.key]`.
+- `group.partition_items` — list of the actual selected items (convenience).
+
+When `partition` is omitted on a fan_out job, the loader emits a one-time
+`FAN_OUT_PARTITION_DEPRECATED` event per worker boot per job type and behaves as
+if `{key: "documents", strategy: "chunks"}` were set. Existing fan_out configs
+keep working without modification.
+
+See [PROMPTS.md](./PROMPTS.md#fan-out) for worked render examples.
+
+## ad_hoc mode
+
+`mode: ad_hoc` is for jobs dispatched from a peer Claude Code session. The worker
+clones a caller-provided repo, writes a per-job `.claude/settings.json` from the
+caller's MCP bundle, renders a built-in prompt template, launches a Terminal
+session, and (optionally) pushes a result branch. Consumers do NOT author prompt
+templates for ad_hoc; the wrapper is `worker/builtin_prompts/ad_hoc.md.j2`. See
+[DISPATCH.md](./DISPATCH.md) for the caller-side contract and
+[ARCHITECTURE.md](./ARCHITECTURE.md#the-ad_hoc-lifecycle) for the engine
+lifecycle.
+
+## handoff mode
+
+`mode: handoff` resumes an existing local Claude Code session on the worker via
+`claude --resume <session-id> --print`. The caller ships their MCP bundle plus
+their session's transcript files (top-level JSONL + subagent JSONLs); the worker
+writes them into `~/.claude/projects/<encoded>/` before launch and bundles the
+extended transcript back via Vault (with Storage fallback for large bundles) so
+the caller can `/handoff:reattach` later. See [HANDOFF.md](./HANDOFF.md) for the
+user-facing how-to and [DISPATCH.md](./DISPATCH.md#handoff) for the contract.
+
+## Progress tailing
+
+When `cfg.dispatch is not None`, every orchestrator (single, fan_out, ad_hoc,
+handoff) starts a `ProgressTailer` thread that reads `_progress.jsonl` from the
+session cwd and writes the latest complete line to `jobs.progress`. Batch
+deployments without a `dispatch:` block get zero progress threads — fully
+gated. See [PROMPTS.md](./PROMPTS.md#progress-reporting) for the line shape and
+caps.
 
 ## Not a replacement for internal Agent tool
 

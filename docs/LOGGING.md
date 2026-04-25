@@ -30,8 +30,12 @@ Every event emitted by the engine has `ts` (ISO-8601 UTC), `event_type` (snake_c
 - `job_claimed` — `job_id`, `job_type`.
 - `job_completed` — `job_id`, `duration_seconds`.
 - `job_failed` — `job_id`, `error` (string; truncated at 2KB).
-- `session_launched` — `job_id`, `window_id` (the macOS window identifier returned by
-  `osascript`).
+- `session_launched` — `job_id`, `window_id`, `handle_kind`. `window_id` is an integer on
+  Mac (the Terminal.app window identifier returned by `osascript`), an opaque hex string on
+  Linux `xfce4-terminal`/`xterm` (the X11 window id from `wmctrl`), or missing on Linux
+  `tmux` mode (no window exists). `handle_kind` disambiguates: one of `mac`, `linux_xfce4`,
+  `linux_xterm`, or `linux_tmux`. Readers that care about the actual identifier should branch
+  on `handle_kind` rather than guessing from `window_id`'s type.
 - `watchdog_killed` — `job_id`, `reason` (one of `idle`, `result_stale`).
 - `startup_requeued` — `job_id`.
 - `reaper_ran` — `count_requeued` (integer).
@@ -76,6 +80,39 @@ All log paths are relative to the repo root on the Mac Mini:
 - `logs/jobs/<job-id>.log` — per-job session transcript when `job_output.capture` is true.
 
 The `logs/` directory is created by `SETUP.md` step 6 and is in `.gitignore`.
+
+## Linux: not journald, and why logrotate needs `copytruncate`
+
+minicrew does NOT use journald on Linux. `logs/worker-<instance>.log` remains the canonical
+log source, parity with the Mac deployment. This keeps log shapes and retention tooling
+identical across OSes and avoids splitting the event stream between the Python file sink and
+`journalctl`. The systemd user unit does capture stdout and stderr with
+`StandardOutput=append:/path/to/log`, but that is a secondary belt-and-braces for startup
+errors that happen before the Python logging subsystem is up. Everything the engine emits
+post-startup goes to the file sink.
+
+Because `StandardOutput=append:` holds the underlying file descriptor open for the lifetime
+of the unit, logrotate's default `rotate`+`create` cycle (rename the log file out from under
+the writer) leaves systemd writing into the renamed file, off logrotate's books. **Use
+`copytruncate` in your logrotate config** — it copies the contents to the rotated filename
+and truncates the original in place, preserving the open fd.
+
+Sample `/etc/logrotate.d/minicrew`:
+
+```
+/home/minicrew/minicrew/logs/*.log {
+    daily
+    rotate 14
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+}
+```
+
+Adjust the path prefix for your repo location. Linux Mint's default logrotate runs daily via
+`/etc/cron.daily/logrotate`; no extra timer setup is needed.
 
 ## v2 roadmap
 

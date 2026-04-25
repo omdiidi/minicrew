@@ -15,10 +15,18 @@ import yaml
 from worker.config.models import (
     Config,
     DbConfig,
+    DispatchConfig,
+    GitHubAppConfig,
     GroupSpec,
+    HandoffConfig,
     JobType,
+    LinuxPlatformConfig,
+    LogStorageConfig,
     LoggingConfig,
+    McpBundleConfig,
     MergeSpec,
+    PartitionSpec,
+    PlatformConfig,
     ReaperConfig,
     WorkerConfig,
 )
@@ -65,6 +73,7 @@ def _build_job_type(name: str, raw: dict) -> JobType:
                 name=g["name"],
                 prompt_template=g["prompt_template"],
                 result_filename=g["result_filename"],
+                result_schema=g.get("result_schema"),
             )
         )
     merge = None
@@ -72,6 +81,13 @@ def _build_job_type(name: str, raw: dict) -> JobType:
         merge = MergeSpec(
             prompt_template=raw["merge"]["prompt_template"],
             result_filename=raw["merge"]["result_filename"],
+            result_schema=raw["merge"].get("result_schema"),
+        )
+    partition = None
+    if raw.get("partition"):
+        partition = PartitionSpec(
+            key=raw["partition"]["key"],
+            strategy=raw["partition"]["strategy"],
         )
     return JobType(
         name=name,
@@ -79,7 +95,8 @@ def _build_job_type(name: str, raw: dict) -> JobType:
         model=raw["model"],
         thinking_budget=raw["thinking_budget"],
         timeout_seconds=int(raw["timeout_seconds"]),
-        prompt_template=raw["prompt_template"],
+        # prompt_template is optional — modes 'ad_hoc' / 'handoff' use built-in templates.
+        prompt_template=raw.get("prompt_template"),
         result_filename=raw["result_filename"],
         description=raw.get("description", ""),
         skill=raw.get("skill"),
@@ -87,6 +104,53 @@ def _build_job_type(name: str, raw: dict) -> JobType:
         result_idle_timeout_seconds=int(raw.get("result_idle_timeout_seconds", 900)),
         groups=groups,
         merge=merge,
+        partition=partition,
+        result_schema=raw.get("result_schema"),
+    )
+
+
+def _build_dispatch(raw: dict) -> DispatchConfig:
+    """Parse the top-level `dispatch` block. Required sub-keys are validated by the JSON schema;
+    this function only fills the dataclasses with the parsed/defaulted values.
+    """
+    gh_raw = raw["github_app"]
+    github_app = GitHubAppConfig(
+        app_id=gh_raw["app_id"],
+        private_key_env=gh_raw["private_key_env"],
+        installation_id_env=gh_raw["installation_id_env"],
+        clone_timeout_seconds=int(gh_raw.get("clone_timeout_seconds", 300)),
+    )
+    ls_raw = raw["log_storage"]
+    log_storage = LogStorageConfig(
+        bucket=ls_raw.get("bucket", "minicrew-logs"),
+        chunk_bytes=int(ls_raw.get("chunk_bytes", 262144)),
+        chunk_interval_seconds=int(ls_raw.get("chunk_interval_seconds", 5)),
+        delete_logs_on_completion=bool(ls_raw.get("delete_logs_on_completion", False)),
+        retention_days=int(ls_raw.get("retention_days", 7)),
+    )
+    mcp_raw = raw.get("mcp_bundle") or {}
+    mcp_bundle = McpBundleConfig(
+        decrypted_view=mcp_raw.get("decrypted_view", "vault.decrypted_secrets"),
+        register_rpc=mcp_raw.get("register_rpc", "dispatch_register_mcp_bundle"),
+        delete_rpc=mcp_raw.get("delete_rpc", "dispatch_delete_mcp_bundle"),
+        delete_mcp_on_completion=bool(mcp_raw.get("delete_mcp_on_completion", True)),
+    )
+    handoff: HandoffConfig | None = None
+    if "handoff" in raw:
+        h_raw = raw.get("handoff") or {}
+        handoff = HandoffConfig(
+            outbound_retention_days=int(h_raw.get("outbound_retention_days", 7)),
+            max_transcript_bundle_bytes=int(h_raw.get("max_transcript_bundle_bytes", 10 * 1024 * 1024)),
+            vault_inline_cap_bytes=int(h_raw.get("vault_inline_cap_bytes", 512 * 1024)),
+            max_timeout_seconds=int(h_raw.get("max_timeout_seconds", 86400)),
+            delete_inbound_on_completion=bool(h_raw.get("delete_inbound_on_completion", True)),
+        )
+    return DispatchConfig(
+        github_app=github_app,
+        log_storage=log_storage,
+        mcp_bundle=mcp_bundle,
+        max_concurrent_per_caller=int(raw.get("max_concurrent_per_caller", 10)),
+        handoff=handoff,
     )
 
 
@@ -163,6 +227,61 @@ def load_config(path: str | Path | None = None) -> Config:
         _secrets=secrets,
     )
 
+    # ----------------------------------------------------------------------
+    # Dispatch block (Phase 2a/3). Optional in pure-batch installs; HARD-required
+    # when any job_type uses mode 'ad_hoc' or 'handoff'. When mode == 'handoff'
+    # we additionally require dispatch.handoff to be present (no silent default).
+    # See docs/SUPABASE-SCHEMA.md for migration steps.
+    # ----------------------------------------------------------------------
+    dispatch_raw = raw.get("dispatch")
+    needs_dispatch_modes = {jt.mode for jt in cfg.job_types.values()} & {"ad_hoc", "handoff"}
+    has_handoff_mode = any(jt.mode == "handoff" for jt in cfg.job_types.values())
+    if needs_dispatch_modes and not dispatch_raw:
+        raise ConfigError(
+            "dispatch block required when any job_type has mode in "
+            f"{sorted(needs_dispatch_modes)}; see docs/SUPABASE-SCHEMA.md"
+        )
+    if dispatch_raw:
+        cfg.dispatch = _build_dispatch(dispatch_raw)
+        if has_handoff_mode and cfg.dispatch.handoff is None:
+            raise ConfigError(
+                "dispatch.handoff block required when any job_type has mode: handoff. "
+                "Add 'dispatch.handoff: {}' to accept defaults; see docs/SUPABASE-SCHEMA.md"
+            )
+
+    # Emit a structured warning for fan_out job_types that omit `partition` — they fall
+    # back to the documents-keyed chunks shim. Best-effort: never fail the loader on this.
+    for _jt_name, _jt in cfg.job_types.items():
+        if _jt.mode == "fan_out" and _jt.partition is None:
+            try:
+                # local import to avoid cycles
+                from worker.observability.events import (
+                    FAN_OUT_PARTITION_DEPRECATED,
+                    emit,
+                )
+
+                emit(
+                    FAN_OUT_PARTITION_DEPRECATED,
+                    job_type=_jt_name,
+                    note="omitting 'partition' falls back to the documents-keyed chunks shim",
+                )
+            except Exception:  # noqa: BLE001 — observability must never break loader
+                pass
+
+    platform_raw = raw.get("platform") or {}
+    platform_kind = platform_raw.get("kind", "auto")
+    linux_raw = platform_raw.get("linux") or {}
+    linux_cfg: LinuxPlatformConfig | None = None
+    if platform_kind == "linux" or (platform_kind == "auto" and sys.platform == "linux"):
+        linux_cfg = LinuxPlatformConfig(
+            display_mode=linux_raw.get("display_mode", "visible"),
+            terminal_emulator=linux_raw.get("terminal_emulator", "xfce4-terminal"),
+            window_open_timeout_seconds=int(linux_raw.get("window_open_timeout_seconds", 15)),
+            exit_grace_seconds=int(linux_raw.get("exit_grace_seconds", 30)),
+            sigterm_to_sigkill_seconds=int(linux_raw.get("sigterm_to_sigkill_seconds", 9)),
+        )
+    cfg.platform = PlatformConfig(kind=platform_kind, linux=linux_cfg)
+
     # Validate referenced prompt templates exist on disk — a missing file is a hard fail at load time.
     # Also enforce path traversal guard: resolved template path must sit under prompts_dir.
     prompts_root_resolved = cfg.prompts_dir.resolve()
@@ -181,6 +300,10 @@ def load_config(path: str | Path | None = None) -> Config:
         return tmpl
 
     for name, jt in cfg.job_types.items():
+        # ad_hoc and handoff use built-in templates packaged inside worker.builtin_prompts;
+        # there is nothing to check on disk under prompts_dir for those modes.
+        if jt.mode in ("ad_hoc", "handoff"):
+            continue
         _check_template(f"job_type '{name}'", jt.prompt_template)
         if jt.mode == "fan_out":
             for group in jt.groups:

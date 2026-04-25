@@ -1,0 +1,25 @@
+{% if user_instruction -%}
+{{ user_instruction }}
+{%- else -%}
+I had to step away. Continue from where you left off — pick up the most recent task we were working on and complete it. If your last turn ended with a pending tool call or an unresolved plan, exercise judgment: proceed with the obvious next step, or if you genuinely need a decision from me, capture the question in `{{ result_filename }}` and exit.
+{%- endif %}
+
+---
+
+When you're done (or stuck on something only I can answer), write `{{ result_filename }}` with at minimum:
+
+- `summary`: one-paragraph summary of what you did
+- `details`: any structured output, decisions made, or open questions
+- `exit_status`: "ok" | "partial" | "blocked" | "error"
+{% if allow_code_push -%}
+- `code_changed`: true | false
+{% endif %}
+{% if allow_code_push -%}
+You are on a fresh result branch named `minicrew/result/{{ job_id }}` — make all your code changes here. Do not push the branch yourself; the worker will push it after you exit.
+{%- else -%}
+The remote `origin` has been removed from this clone, so `git push` will fail with "no remote." That's intentional. If your work produces code changes, capture them as patches inside `{{ result_filename }}#details`.
+{%- endif %}
+
+You may append JSON lines to `_progress.jsonl` for live progress reporting (lines >64KB are dropped).
+
+This session is running headlessly via `claude --resume --print`. The session ends naturally when you finish your response — `/exit` is not required (and is a no-op in print mode).

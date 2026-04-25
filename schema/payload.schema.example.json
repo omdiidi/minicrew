@@ -1,6 +1,95 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "minicrew job payload",
-  "description": "Permissive default. Replace with a tighter schema when your job_types stabilize. If this file exists in your worker-config/, the engine validates every job's payload against it before launching Claude Code.",
-  "type": "object"
+  "$comment": "Example payload schema. Inline shapes for the ad_hoc and handoff job_types are shown side-by-side. For mixed batch + ad_hoc + handoff deployments, replace the body with the $oneOfSkeleton at the bottom of this file.",
+  "description": "Example shapes for the ad_hoc and handoff job_types. Replace this file with one tailored to your job_types. The engine validates every job's payload against this file (when present) before launching Claude Code.",
+
+  "$adHocExample": {
+    "$comment": "Inline ad_hoc payload shape — the orchestrator reads payload flat (NOT wrapped under an 'ad_hoc' key).",
+    "type": "object",
+    "required": ["prompt", "repo"],
+    "properties": {
+      "prompt": {"type": "string", "minLength": 1},
+      "repo": {
+        "type": "object",
+        "required": ["url", "sha"],
+        "properties": {
+          "url": {"type": "string", "pattern": "^https://github.com/"},
+          "sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"}
+        }
+      },
+      "allow_code_push": {"type": "boolean", "default": false}
+    }
+  },
+
+  "$handoffExample": {
+    "$comment": "Inline handoff payload shape. session_id and transcript_bundle_id are UUIDs. Caller-supplied timeout overrides are CAPPED in the schema; the orchestrator additionally caps them at cfg.dispatch.handoff.max_timeout_seconds.",
+    "type": "object",
+    "required": ["repo", "session_id", "transcript_bundle_id"],
+    "properties": {
+      "prompt": {"type": "string"},
+      "repo": {
+        "type": "object",
+        "required": ["url", "sha"],
+        "properties": {
+          "url": {"type": "string", "pattern": "^https://github.com/"},
+          "sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"}
+        }
+      },
+      "session_id": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+      },
+      "transcript_bundle_id": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+      },
+      "allow_code_push": {"type": "boolean", "default": false},
+      "timeout_override_seconds": {"type": "integer", "minimum": 60, "maximum": 86400},
+      "idle_timeout_override_seconds": {"type": "integer", "minimum": 60, "maximum": 7200}
+    }
+  },
+
+  "type": "object",
+  "required": ["prompt", "repo"],
+  "properties": {
+    "prompt": {"type": "string", "minLength": 1},
+    "repo": {
+      "type": "object",
+      "required": ["url", "sha"],
+      "properties": {
+        "url": {"type": "string", "pattern": "^https://github.com/"},
+        "sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"}
+      }
+    },
+    "allow_code_push": {"type": "boolean", "default": false}
+  },
+
+  "$oneOfSkeleton": {
+    "$comment": "Copy this in place of the body above when you have multiple job_types. Replace each branch with your actual shapes.",
+    "oneOf": [
+      {
+        "$comment": "ad_hoc",
+        "type": "object",
+        "required": ["prompt", "repo"],
+        "properties": {"prompt": {"type": "string"}, "repo": {"type": "object"}}
+      },
+      {
+        "$comment": "handoff",
+        "type": "object",
+        "required": ["repo", "session_id", "transcript_bundle_id"],
+        "properties": {
+          "session_id": {"type": "string"},
+          "transcript_bundle_id": {"type": "string"},
+          "repo": {"type": "object"}
+        }
+      },
+      {
+        "$comment": "summarize (batch example)",
+        "type": "object",
+        "required": ["documents"],
+        "properties": {"documents": {"type": "array"}}
+      }
+    ]
+  }
 }
