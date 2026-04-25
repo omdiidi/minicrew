@@ -60,8 +60,15 @@ def write_runner_script(
         model_arg = ""
         effort_arg = ""
 
+    # Use --print --verbose --output-format=stream-json so the visible Terminal
+    # renders every event (system init, tool calls, assistant messages, final
+    # result) as JSONL while the session runs. Plain `--print` only prints the
+    # final answer, defeating the "visible window" intent in CLAUDE.md.
+    # `result.json` is still written by the in-session Write tool; the watchdog
+    # picks it up the same way.
     claude_cmd = (
-        f'claude --dangerously-skip-permissions {model_arg} {effort_arg} '
+        f'claude --print --verbose --output-format=stream-json '
+        f'--dangerously-skip-permissions {model_arg} {effort_arg} '
         f'"$(cat _prompt.txt)"'
     ).strip()
     if log_path is not None:
