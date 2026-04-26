@@ -81,6 +81,8 @@ Installed under `~/.claude/commands/minicrew/`. See [SKILLS-INTEGRATION.md](./SK
 | `/minicrew:add-job-type` | Append a new job_type entry to `worker-config/config.yaml`. |
 | `/minicrew:scaffold-project` | Initialize `worker-config/` in a consumer repo. |
 | `/minicrew:tune` | Adjust `model` / `thinking_budget` / `timeout_seconds` on existing job_types. |
+| `/minicrew:dispatch <task>` | Send an ad_hoc task to a worker and block on the result. See [SUBAGENT-INTEGRATION.md](./SUBAGENT-INTEGRATION.md). |
+| `/minicrew:fanout N <task>` | Run the same task across N parallel workers; optionally synthesize. See [SUBAGENT-INTEGRATION.md](./SUBAGENT-INTEGRATION.md). |
 
 ## Handoff (caller-side, dispatcher skill in user's dotfiles)
 

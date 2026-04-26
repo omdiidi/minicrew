@@ -14,3 +14,7 @@ EFFORT_MAP: dict[str, str] = {
     "medium": "medium",
     "high": "high",
 }
+
+# TODO: when build_tmux_runner_script is added here per the tui-via-tmux plan,
+# preserve `export MINICREW_INSIDE_WORKER=1` in its generated preamble; the
+# recursion guard for the Minicrew Mac Mini custom agent depends on it.

@@ -444,6 +444,40 @@ curl "$SUPABASE_URL/rest/v1/jobs?id=eq.$JOB_ID&select=status,result,error_messag
 
 Expected within the configured `timeout_seconds`: one row with `status: "completed"` and a non-null `result` JSON object. If `status: "error"`, read `error_message`; if `status: "failed_permanent"`, the job exceeded `max_attempts`.
 
+## Optional: auto-route long tasks to minicrew
+
+In your consumer project's `CLAUDE.md`, add at the bottom:
+
+```
+@~/.claude/commands/minicrew/routing-rules.md
+```
+
+This teaches Claude Code in your project's sessions WHEN to dispatch to a minicrew
+worker (long, parallel, repo-isolated tasks) vs. stay local. The fragment is
+conservative by default; tweak for your workflow.
+
+Example consumer `CLAUDE.md`:
+
+```
+# MyProject
+
+<existing project rules go here>
+
+## Subagent routing
+
+@~/.claude/commands/minicrew/routing-rules.md
+```
+
+That single `@import` line at the bottom of any consumer's CLAUDE.md teaches Claude
+Code in that project's sessions when to dispatch to a minicrew worker vs. handle
+locally.
+
+For projects that want minicrew available but don't want auto-routing, just use the
+`/minicrew:dispatch` slash command explicitly. See
+[docs/SUBAGENT-INTEGRATION.md](./docs/SUBAGENT-INTEGRATION.md) for the three
+invocation paths (slash skill, `Task()` custom agent, prose discovery via the
+routing-rules fragment).
+
 ## Optional `platform:` block (Linux tuning)
 
 Consumer `config.yaml` may include an optional `platform:` top-level block for Linux-specific

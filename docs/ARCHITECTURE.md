@@ -18,6 +18,50 @@ into `~/.claude/commands/minicrew/` on each host. After the initial bootstrap wa
 a job type, checking status, tearing down) happens through a conversational skill. The user never
 memorizes a bash command.
 
+## Subagent Surface
+
+Beyond the engine and the operator skills, minicrew exposes a third surface
+aimed at OTHER Claude Code sessions that want to delegate work to the fleet.
+This is the "subagent surface" and it has three caller-side paths, all of
+which bottom out on the same load-bearing primitive: `python -m worker
+--dispatch ad_hoc --wait`.
+
+- **Path A — slash skill.** `skills/dispatch.md` and `skills/fanout.md` install
+  to `~/.claude/commands/minicrew/` alongside the operator skills. An operator
+  types `/minicrew:dispatch <task>` (or `/minicrew:fanout N <task>`); Claude
+  Code reads the skill body, constructs the dispatch CLI invocation, and runs
+  it via the Bash tool with `--wait` so the call blocks until the worker
+  reports a terminal status.
+- **Path B — `Task()` custom agent.** `agents/minicrew-mac-mini.md` installs
+  to `~/.claude/agents/`. Any Claude Code session can spawn
+  `Task(subagent_type="Minicrew Mac Mini", prompt=...)`; the sub-Claude reads
+  the agent body, runs the dispatch CLI under tool restrictions (Bash + Read
+  only), and returns the worker's `result.json` to the calling session inside
+  base64-wrapped delimited markers. The base64 wrapper is a delimiter-injection
+  defence: the base64 alphabet cannot collide with the marker string.
+- **Path C — prose discovery via routing-rules.** `skills/routing-rules.md`
+  installs to `~/.claude/commands/minicrew/` as an importable CLAUDE.md
+  fragment. Consumer projects add `@~/.claude/commands/minicrew/routing-rules.md`
+  to their `CLAUDE.md`; Claude Code then matches operator prose against the
+  fragment's "Dispatch when X / Stay local when Y" heuristics and may invoke
+  Path A without an explicit slash.
+
+The three paths are additive, not exclusive. Path A is the lowest common
+denominator (works on any Claude Code version that supports markdown
+commands). Path B requires user-scoped `~/.claude/agents/` discovery
+(Claude Code 2.x+); when unsupported the agent file is harmlessly ignored.
+Path C layers on top of Path A — it changes the trigger but not the
+implementation.
+
+A recursion guard ties the surface together: every worker session's runner
+script (emitted by `worker/terminal/launcher.py` and `launcher_resume.py`)
+exports `MINICREW_INSIDE_WORKER=1`, and the `Minicrew Mac Mini` agent body
+refuses to dispatch when it sees that env var. This prevents workers from
+spawning workers indefinitely if the agent ever ends up installed inside a
+worker's `~/.claude/agents/` (e.g. on a developer machine that is also a
+worker host). Full details and the caller-side base64 extraction helper live
+in `docs/SUBAGENT-INTEGRATION.md`.
+
 ## Runtime topology
 
 A deployment is one or more Mac Minis. Each machine runs one to five worker instances supervised

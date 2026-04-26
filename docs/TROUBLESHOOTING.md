@@ -627,6 +627,82 @@ Either reduce the requested override below 86400, or bump
 `cfg.dispatch.handoff.max_timeout_seconds` AND the corresponding `maximum` in
 the payload schema. Restart workers + re-validate config.
 
+## `/minicrew:dispatch` or `Task("Minicrew Mac Mini", ...)` refused with "MINICREW_INSIDE_WORKER=1"
+
+### Symptom
+Dispatch returns immediately with `error: refusing dispatch from inside a
+minicrew worker session (MINICREW_INSIDE_WORKER=1)` (CLI exit 2), or the
+custom agent reply contains `{"error": "refused: cannot dispatch from inside
+a minicrew worker session"}`.
+
+### Cause
+The recursion guard is firing. The runner script that started this Claude
+Code session exports `MINICREW_INSIDE_WORKER=1` to prevent workers from
+spawning workers indefinitely. Either:
+- You're legitimately inside a worker session and the guard is doing its
+  job (most common), OR
+- The env var is set in your shell rc and is leaking into a non-worker
+  session, OR
+- You manually set the var and forgot.
+
+### Fix
+For a one-off override (use sparingly): `unset MINICREW_INSIDE_WORKER` in
+the current shell, then re-dispatch. To check whether you're really inside
+a worker: `pgrep -fl "python -m worker"` should return non-empty if you
+are. If the var is leaking from your shell rc, remove the export from
+`~/.zshrc` / `~/.bashrc`.
+
+## Rolling back the subagent-integration layer
+
+### Symptom
+The custom agent / slash skills / CLAUDE.md routing fragment misbehave
+(auto-dispatching when they shouldn't, prose discovery never firing,
+etc.) and you want to disable the entire integration without uninstalling
+the worker engine.
+
+### Cause
+Three install surfaces accumulate state:
+- `~/.claude/commands/minicrew/dispatch.md`, `fanout.md`, `routing-rules.md`
+- `~/.claude/agents/minicrew-mac-mini.md`
+- The `@~/.claude/commands/minicrew/routing-rules.md` import in any
+  consumer CLAUDE.md.
+
+### Fix
+```bash
+rm ~/.claude/commands/minicrew/dispatch.md
+rm ~/.claude/commands/minicrew/fanout.md
+rm ~/.claude/commands/minicrew/routing-rules.md
+rm ~/.claude/agents/minicrew-mac-mini.md
+# Then in any consumer CLAUDE.md that imported routing-rules.md, remove the line:
+#   @~/.claude/commands/minicrew/routing-rules.md
+```
+The `python -m worker --dispatch` CLI keeps working (it's the load-bearing
+primitive); only the slash-command, custom-agent, and prose-discovery
+surfaces are removed.
+
+## Caller-side base64 extraction returns garbled text or U+FFFD characters
+
+### Symptom
+Calling Claude received a `Task(subagent_type="Minicrew Mac Mini", ...)`
+reply, extracted the body between `===MINICREW_B64_BEGIN===` markers, but
+the decoded string contains the Unicode replacement character (U+FFFD,
+`�`) or is otherwise garbled.
+
+### Cause
+The example extraction helper in `docs/SUBAGENT-INTEGRATION.md` uses
+`.decode("utf-8", "replace")`, which silently substitutes invalid bytes.
+A worker that returned non-UTF-8 bytes (binary blob, mis-encoded text)
+passes through corrupted but doesn't error.
+
+### Fix
+Switch to strict decoding to catch corruption early:
+```python
+bundle_text = base64.b64decode(b64).decode("utf-8", "strict")
+```
+`UnicodeDecodeError` will surface immediately and the calling Claude can
+either retry or surface the failure. Strict decode is recommended for
+any caller that processes the result programmatically.
+
 ## Operator: driving Mac Mini via Chrome Remote Desktop
 
 ### Symptom

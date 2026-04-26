@@ -216,6 +216,83 @@ _VALID_DISPATCH_TYPES = ("ad_hoc", "handoff")
 _SHA_LEN = 40
 
 
+def _infer_repo_and_sha() -> tuple[str | None, str | None, list[str]]:
+    """Infer (repo_url, sha, warnings) from the current cwd.
+
+    Returns (None, None, []) when not in a git repo or no remote.origin
+    is configured. Returns (None, None, [ERROR ...]) when the origin
+    remote exists but is not a supported https://github.com/ URL.
+    Returns (url, sha, [WARNING ...]) on success; warnings may include
+    detached-HEAD or dirty-tree notes that the caller should surface.
+    """
+    import subprocess
+
+    warnings: list[str] = []
+    try:
+        url = subprocess.check_output(
+            ["git", "config", "--get", "remote.origin.url"],
+            text=True, stderr=subprocess.DEVNULL,
+        ).strip()
+        sha = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            text=True, stderr=subprocess.DEVNULL,
+        ).strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return None, None, []
+
+    # Misconfigured repo edge: key exists but blank value.
+    if not url:
+        return None, None, []
+
+    # Detached HEAD warning (worker may fail to clone if SHA isn't on a remote branch).
+    try:
+        branch = subprocess.check_output(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            text=True, stderr=subprocess.DEVNULL,
+        ).strip()
+        if branch == "HEAD":
+            warnings.append(
+                "WARNING: detached HEAD - SHA may not be reachable from any "
+                "remote branch; worker clone may fail."
+            )
+    except subprocess.CalledProcessError:
+        pass
+
+    # Dirty tree warning (worker runs against committed SHA, not WC).
+    try:
+        dirty = subprocess.check_output(
+            ["git", "status", "--porcelain"],
+            text=True, stderr=subprocess.DEVNULL,
+        ).strip()
+        if dirty:
+            warnings.append(
+                "WARNING: working tree is dirty; worker runs against the "
+                "committed SHA, NOT your uncommitted edits."
+            )
+    except subprocess.CalledProcessError:
+        pass
+
+    # URL normalization.
+    if url.startswith("git@github.com:"):
+        url = "https://github.com/" + url.removeprefix("git@github.com:").removesuffix(".git")
+    elif url.startswith("ssh://git@github.com/"):
+        url = "https://github.com/" + url.removeprefix("ssh://git@github.com/").removesuffix(".git")
+    elif url.startswith("git@") and ":" in url:
+        # Non-github SSH (e.g. GHE: git@ghe.example.com:owner/repo.git)
+        return None, None, [
+            f"ERROR: origin remote is non-GitHub ({url}). Worker only supports "
+            "https://github.com/ URLs. Pass --repo explicitly."
+        ]
+    elif url.startswith("https://") and not url.startswith("https://github.com/"):
+        return None, None, [
+            f"ERROR: origin remote is not GitHub ({url}). Pass --repo explicitly."
+        ]
+    if url.startswith("https://"):
+        url = url.removesuffix(".git")
+
+    return url, sha, warnings
+
+
 def _dispatch_env() -> tuple[str, str]:
     """Resolve (supabase_url, auth_key) from env. Caller may use service_role
     for testing or a user JWT in MINICREW_DISPATCH_JWT for least-privilege.
@@ -249,13 +326,54 @@ def _cmd_dispatch(args: argparse.Namespace) -> int:
 
     import httpx
 
+    if os.environ.get("MINICREW_INSIDE_WORKER") == "1":
+        print(
+            "error: refusing dispatch from inside a minicrew worker session "
+            "(MINICREW_INSIDE_WORKER=1). This is the recursion guard. "
+            "If you intended to dispatch, unset the env var first.",
+            file=sys.stderr,
+        )
+        return 2
+
     kind = args.dispatch
     if kind not in _VALID_DISPATCH_TYPES:
         print(f"error: --dispatch must be one of {_VALID_DISPATCH_TYPES}", file=sys.stderr)
         return 2
 
-    if not args.repo or not args.sha:
-        print("error: --repo and --sha are required.", file=sys.stderr)
+    if args.prompt_base64:
+        if args.prompt:
+            print("error: --prompt and --prompt-base64 are mutually exclusive", file=sys.stderr)
+            return 2
+        try:
+            import base64 as _b64
+            args.prompt = _b64.b64decode(args.prompt_base64).decode("utf-8")
+        except (ValueError, UnicodeDecodeError) as e:
+            print(f"error: --prompt-base64 not valid base64 UTF-8: {e}", file=sys.stderr)
+            return 2
+
+    if not args.repo and not args.sha:
+        # Both missing — full inference is safe.
+        inferred_repo, inferred_sha, msgs = _infer_repo_and_sha()
+        args.repo, args.sha = inferred_repo, inferred_sha
+        for msg in msgs:
+            print(msg, file=sys.stderr)
+            if msg.startswith("ERROR:"):
+                return 2
+        if not args.repo or not args.sha:
+            print(
+                "error: --repo and --sha not provided and could not be inferred "
+                "from cwd (not a git repo, or no remote.origin set).",
+                file=sys.stderr,
+            )
+            return 2
+    elif not args.repo or not args.sha:
+        # Only one missing — partial inference is unsafe (cwd may not match
+        # the explicit repo). Require both.
+        print(
+            "error: pass both --repo and --sha (partial inference is unsafe; "
+            "cwd may not match the explicit repo).",
+            file=sys.stderr,
+        )
         return 2
     if len(args.sha) != _SHA_LEN or any(c not in "0123456789abcdef" for c in args.sha.lower()):
         print("error: --sha must be a 40-char hex commit sha.", file=sys.stderr)
@@ -335,7 +453,7 @@ def _cmd_dispatch(args: argparse.Namespace) -> int:
                 if snap != last:
                     print(snap)
                     last = snap
-                if row["status"] in ("completed", "failed", "cancelled", "error"):
+                if row["status"] in ("completed", "failed_permanent", "cancelled", "error"):
                     print(json.dumps({"final": row}, default=str, indent=2))
                     return 0 if row["status"] == "completed" else 1
         except httpx.HTTPError:
@@ -421,6 +539,9 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--repo", type=str, default=None, help="https://github.com/<owner>/<repo>")
     parser.add_argument("--sha", type=str, default=None, help="40-char commit sha")
     parser.add_argument("--prompt", type=str, default=None, help="Task prompt (ad_hoc)")
+    parser.add_argument("--prompt-base64", dest="prompt_base64", type=str, default=None,
+                        help="Prompt as base64-encoded UTF-8. Use to avoid shell-quoting issues "
+                             "with prompts containing $, backticks, or heredoc-delimiter strings.")
     parser.add_argument("--session-id", dest="session_id", type=str, default=None,
                         help="UUID of the local Claude session to resume (handoff)")
     parser.add_argument("--bundle-id", dest="bundle_id", type=str, default=None,

@@ -53,8 +53,11 @@ def write_runner_script_resume(
     ]
     claude_cmd = " ".join(parts) + f" 2>&1 | tee {shlex.quote(str(log_path))}"
     preamble = "sleep 1\n" if sys.platform == "linux" else ""
+    # Recursion guard: every worker session exports MINICREW_INSIDE_WORKER=1 so
+    # the Minicrew Mac Mini custom agent refuses to dispatch back into the fleet.
     runner.write_text(
         "#!/bin/bash\n"
+        "export MINICREW_INSIDE_WORKER=1\n"
         f"{preamble}"
         f"cd {shlex.quote(real_cwd)}\n"
         f"{claude_cmd}\n",

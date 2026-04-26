@@ -175,26 +175,49 @@ fix their `worker-config/config.yaml`.
 
 ---
 
-## Step 7 (macOS) — Install skills
+## Step 7 (macOS) — Install skills and agents
 
-**Goal:** copy the repo's skills into `~/.claude/commands/minicrew/`.
+**Goal:** copy the repo's skills into `~/.claude/commands/minicrew/` and the repo's
+custom Claude Code agents into `~/.claude/agents/`.
 
 **Commands:**
 ```bash
 mkdir -p "$HOME/.claude/commands/minicrew"
 cp skills/*.md "$HOME/.claude/commands/minicrew/"
+
+mkdir -p "$HOME/.claude/agents"
+cp agents/*.md "$HOME/.claude/agents/"
+
 ls "$HOME/.claude/commands/minicrew/"
+ls "$HOME/.claude/agents/"
 ```
 
-**Success criterion:** `ls` shows all the skill markdown files present.
+**Success criterion:** `ls` shows all the skill markdown files present in
+`~/.claude/commands/minicrew/`, and the `Minicrew Mac Mini` custom agent (file
+`minicrew-mac-mini.md`) present in `~/.claude/agents/`.
 
 **Tell the user:** after this step any future Claude Code session on this machine can invoke
 `/minicrew:setup`, `/minicrew:add-worker`, `/minicrew:status`, `/minicrew:scaffold-project`,
-`/minicrew:tune`, `/minicrew:add-job-type`, `/minicrew:add-machine`, and
-`/minicrew:teardown`.
+`/minicrew:tune`, `/minicrew:add-job-type`, `/minicrew:add-machine`,
+`/minicrew:teardown`, `/minicrew:dispatch`, and `/minicrew:fanout`. The custom agent is
+spawnable as `Task(subagent_type="Minicrew Mac Mini", ...)`. See
+[docs/SUBAGENT-INTEGRATION.md](./docs/SUBAGENT-INTEGRATION.md) for the three invocation
+paths (slash skill, Task() agent, prose discovery via routing-rules).
 
-**Failure response:** if `cp` fails, check that `skills/` exists in the current repo; if not,
-the user is not in the repo root. Stop.
+**Note for callers using `Task(subagent_type="Minicrew Mac Mini", ...)`:** the
+custom agent shells out to `python -m worker --dispatch ad_hoc`, which still
+needs `SUPABASE_URL` and one of `MINICREW_DISPATCH_JWT` /
+`SUPABASE_SERVICE_ROLE_KEY` exported in the calling Claude Code session's
+environment. Copying the agent file alone is not sufficient.
+
+The runner script exports `MINICREW_INSIDE_WORKER=1` so the dispatch CLI and
+the custom agent both refuse re-dispatch from inside a worker. See
+`docs/TROUBLESHOOTING.md` if you need to override this for a one-off case.
+
+**Failure response:** if `cp` fails, check that `skills/` and `agents/` exist in the
+current repo; if not, the user is not in the repo root. Stop. If the operator's Claude
+Code version pre-dates user-scoped custom agents, the agents copy will be inert (no
+crash); operators can still dispatch via `/minicrew:dispatch` (slash path).
 
 ---
 
@@ -467,23 +490,44 @@ preflight is green.
 
 ---
 
-## Step 8 (Linux) — Install skills
+## Step 8 (Linux) — Install skills and agents
 
-**Goal:** copy the repo's skills into `~/.claude/commands/minicrew/`.
+**Goal:** copy the repo's skills into `~/.claude/commands/minicrew/` and the repo's
+custom Claude Code agents into `~/.claude/agents/`.
 
 **Commands:**
 ```bash
 mkdir -p "$HOME/.claude/commands/minicrew"
 cp skills/*.md "$HOME/.claude/commands/minicrew/"
+
+mkdir -p "$HOME/.claude/agents"
+cp agents/*.md "$HOME/.claude/agents/"
+
 ls "$HOME/.claude/commands/minicrew/"
+ls "$HOME/.claude/agents/"
 ```
 
-**Success criterion:** `ls` shows all skill markdown files present.
+**Success criterion:** `ls` shows all skill markdown files present in
+`~/.claude/commands/minicrew/`, and the `Minicrew Mac Mini` custom agent (file
+`minicrew-mac-mini.md`) present in `~/.claude/agents/`.
 
 **Tell the user:** after this step any future Claude Code session on this machine can invoke
 `/minicrew:setup`, `/minicrew:add-worker`, `/minicrew:status`, `/minicrew:scaffold-project`,
-`/minicrew:tune`, `/minicrew:add-job-type`, `/minicrew:add-machine`, and
-`/minicrew:teardown`.
+`/minicrew:tune`, `/minicrew:add-job-type`, `/minicrew:add-machine`,
+`/minicrew:teardown`, `/minicrew:dispatch`, and `/minicrew:fanout`. The custom agent is
+spawnable as `Task(subagent_type="Minicrew Mac Mini", ...)`. See
+[docs/SUBAGENT-INTEGRATION.md](./docs/SUBAGENT-INTEGRATION.md) for the three invocation
+paths (slash skill, Task() agent, prose discovery via routing-rules).
+
+**Note for callers using `Task(subagent_type="Minicrew Mac Mini", ...)`:** the
+custom agent shells out to `python -m worker --dispatch ad_hoc`, which still
+needs `SUPABASE_URL` and one of `MINICREW_DISPATCH_JWT` /
+`SUPABASE_SERVICE_ROLE_KEY` exported in the calling Claude Code session's
+environment. Copying the agent file alone is not sufficient.
+
+The runner script exports `MINICREW_INSIDE_WORKER=1` so the dispatch CLI and
+the custom agent both refuse re-dispatch from inside a worker. See
+`docs/TROUBLESHOOTING.md` if you need to override this for a one-off case.
 
 ---
 
