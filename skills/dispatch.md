@@ -27,8 +27,9 @@ Before dispatching, check if you are running INSIDE a worker session.
 Run `bash -c 'echo "${MINICREW_INSIDE_WORKER:-0}"'`. If the output is
 `1`, REFUSE — dispatching from inside a worker creates a loop.
 Tell the user "I'm running inside a minicrew worker session; doing
-this task locally instead of dispatching" and execute the task
-directly (or refuse if you cannot).
+this task locally instead of dispatching" and refuse and tell the
+user to run the task in a sibling shell or local Claude Code session
+if they want it executed locally.
 
 ## Secret scrubber
 
@@ -84,11 +85,12 @@ references the worker can dereference, not literal values."
 3. Build the bash command. Use `--prompt-base64` to bypass shell-quoting risk
    for any `$`, backticks, `\`, or heredoc-delimiter strings in the task text.
    The CLI also accepts `--prompt <text>` for short, ASCII-only prompts.
+   # 540s (9 min) stays under Claude Code's Bash tool 10-min ceiling. For operator-driven testing only, you can bump this if you invoke the CLI outside a Bash tool call.
    ```bash
    B64=$(printf '%s' "<TASK>" | base64 | tr -d '\n')
    python -m worker --dispatch ad_hoc \
      --repo "$REPO" --sha "$SHA" \
-     --wait --wait-seconds 1800 \
+     --wait --wait-seconds 540 \
      --prompt-base64 "$B64"
    ```
    Run via Bash tool. Capture stdout — it's a stream of JSON lines:

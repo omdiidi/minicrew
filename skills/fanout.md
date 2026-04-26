@@ -23,6 +23,10 @@ and collecting all N results. This is the fan-out variant of
 Before dispatching, check if you are running INSIDE a worker session.
 Run `bash -c 'echo "${MINICREW_INSIDE_WORKER:-0}"'`. If the output is
 `1`, REFUSE — dispatching from inside a worker creates a loop.
+Tell the user "I'm running inside a minicrew worker session; doing
+this task locally instead of dispatching" and refuse and tell the
+user to run the task in a sibling shell or local Claude Code session
+if they want it executed locally.
 
 ## Secret scrubber
 
@@ -64,11 +68,12 @@ Same as `/minicrew:dispatch`, plus:
    risk for any `$`, backticks, `\`, or heredoc-delimiter strings in the
    task text. The CLI also accepts `--prompt <text>` for short, ASCII-only
    prompts. Each call runs:
+   # 540s (9 min) stays under Claude Code's Bash tool 10-min ceiling. For operator-driven testing only, you can bump this if you invoke the CLI outside a Bash tool call.
    ```bash
    B64=$(printf '%s' "<TASK>" | base64 | tr -d '\n')
    python -m worker --dispatch ad_hoc \
      --repo "$REPO" --sha "$SHA" \
-     --wait --wait-seconds 1800 \
+     --wait --wait-seconds 540 \
      --prompt-base64 "$B64"
    ```
    Use `timeout=600000` on each Bash call. Each call's stdout is a

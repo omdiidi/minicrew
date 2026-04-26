@@ -538,10 +538,12 @@ def _build_parser() -> argparse.ArgumentParser:
         "--dispatch",
         choices=list(_VALID_DISPATCH_TYPES),
         default=None,
-        help="Insert a job. Use with --repo --sha --prompt (ad_hoc) or "
+        help="Insert a job. Use with --repo --sha --prompt (or --prompt-base64) (ad_hoc) or "
              "--repo --sha --session-id --bundle-id (handoff). Optional --wait. "
              "Refuses to run when MINICREW_INSIDE_WORKER=1 (recursion guard for "
-             "nested worker sessions).",
+             "nested worker sessions). The MINICREW_INSIDE_WORKER guard checks the "
+             "CALLER's environment (set automatically by minicrew worker runner scripts; "
+             "refuse manual override unless you know what you're doing).",
     )
     parser.add_argument("--repo", type=str, default=None, help="https://github.com/<owner>/<repo>")
     parser.add_argument("--sha", type=str, default=None, help="40-char commit sha")

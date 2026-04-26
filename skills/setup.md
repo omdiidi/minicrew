@@ -89,7 +89,9 @@ mkdir -p "$HOME/.claude/commands/minicrew"
 cp "$REPO_PATH"/skills/*.md "$HOME/.claude/commands/minicrew/"
 
 mkdir -p "$HOME/.claude/agents"
-cp "$REPO_PATH"/agents/*.md "$HOME/.claude/agents/"
+if [ -d "$REPO_PATH/agents" ] && ls "$REPO_PATH"/agents/*.md >/dev/null 2>&1; then
+  cp "$REPO_PATH"/agents/*.md "$HOME/.claude/agents/"
+fi
 
 ls "$HOME/.claude/commands/minicrew/"
 ls "$HOME/.claude/agents/"
@@ -236,7 +238,9 @@ mkdir -p "$HOME/.claude/commands/minicrew"
 cp "$REPO_PATH"/skills/*.md "$HOME/.claude/commands/minicrew/"
 
 mkdir -p "$HOME/.claude/agents"
-cp "$REPO_PATH"/agents/*.md "$HOME/.claude/agents/"
+if [ -d "$REPO_PATH/agents" ] && ls "$REPO_PATH"/agents/*.md >/dev/null 2>&1; then
+  cp "$REPO_PATH"/agents/*.md "$HOME/.claude/agents/"
+fi
 
 ls "$HOME/.claude/commands/minicrew/"
 ls "$HOME/.claude/agents/"

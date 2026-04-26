@@ -259,18 +259,26 @@ handoff lifecycle. The short version:
 ### Recursion guard
 
 Worker sessions export `MINICREW_INSIDE_WORKER=1` in their runner-script
-environment. The dispatch CLI refuses to insert a new job when this env
-var is `1` (defense-in-depth: prevents workers from spawning workers
-indefinitely). The `Minicrew Mac Mini` custom agent body and the
-`routing-rules.md` CLAUDE.md fragment both check the same env var and
-return a refusal payload instead of dispatching.
+environment. Three layers of defense:
 
-Custom dispatch callers (REST APIs, alternative SDKs, manual `python -m
-worker --dispatch` invocations) MUST NOT clear or override this env var
-inside a worker session. If you need to bypass the guard for an
-operational one-off (e.g. testing from a worker shell), `unset
-MINICREW_INSIDE_WORKER` in the current shell first — then re-set it
-before exiting so subsequent commands respect the guard.
+- **CLI level** (`python -m worker --dispatch`): refuses to insert a job
+  when the env var is `1`. Exit 2 with a clear error.
+- **Custom agent body** (`Minicrew Mac Mini`): returns a base64-wrapped
+  refusal payload inside the result markers and stops.
+- **Routing-rules fragment** (`@~/.claude/commands/minicrew/routing-rules.md`):
+  instructs Claude to do the task locally rather than dispatch.
+
+These are sequential, not redundant: the routing-rules layer fires
+first (Claude decides not to dispatch), the agent fires second (if
+Claude does dispatch via Task() inside a worker), the CLI fires last
+(defense-in-depth against bypass).
+
+Custom dispatch callers (REST APIs, alternative SDKs, manual
+`python -m worker --dispatch` invocations) MUST NOT clear or override
+this env var inside a worker session. For an operational one-off
+(e.g. testing from a worker shell), `unset MINICREW_INSIDE_WORKER`
+in the current shell first — then re-set it before exiting so
+subsequent commands respect the guard.
 
 ## Trust model
 

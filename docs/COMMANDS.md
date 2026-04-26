@@ -70,7 +70,7 @@ python -m worker.config.loader --validate ./worker-config
 
 ## Skills (slash commands inside Claude Code, after `SETUP.md` Step 7/8)
 
-Installed under `~/.claude/commands/minicrew/`. See [SKILLS-INTEGRATION.md](./SKILLS-INTEGRATION.md).
+Installed under `~/.claude/commands/minicrew/`. See [SUBAGENT-INTEGRATION.md](./SUBAGENT-INTEGRATION.md).
 
 | Command | What |
 |---|---|
