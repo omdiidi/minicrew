@@ -346,10 +346,15 @@ def _cmd_dispatch(args: argparse.Namespace) -> int:
             return 2
         try:
             import base64 as _b64
-            args.prompt = _b64.b64decode(args.prompt_base64).decode("utf-8")
-        except (ValueError, UnicodeDecodeError) as e:
+            import binascii
+            args.prompt = _b64.b64decode(args.prompt_base64, validate=True).decode("utf-8")
+        except (ValueError, UnicodeDecodeError, binascii.Error) as e:
             print(f"error: --prompt-base64 not valid base64 UTF-8: {e}", file=sys.stderr)
             return 2
+
+    if args.prompt and "\x00" in args.prompt:
+        print("error: prompt contains a null byte (\\x00); JSON parsers downstream truncate silently.", file=sys.stderr)
+        return 2
 
     if not args.repo and not args.sha:
         # Both missing — full inference is safe.
@@ -534,7 +539,9 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=list(_VALID_DISPATCH_TYPES),
         default=None,
         help="Insert a job. Use with --repo --sha --prompt (ad_hoc) or "
-             "--repo --sha --session-id --bundle-id (handoff). Optional --wait.",
+             "--repo --sha --session-id --bundle-id (handoff). Optional --wait. "
+             "Refuses to run when MINICREW_INSIDE_WORKER=1 (recursion guard for "
+             "nested worker sessions).",
     )
     parser.add_argument("--repo", type=str, default=None, help="https://github.com/<owner>/<repo>")
     parser.add_argument("--sha", type=str, default=None, help="40-char commit sha")

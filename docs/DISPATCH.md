@@ -63,6 +63,14 @@ job that doesn't need MCP servers, the CLI is the full happy path.
 Use `MINICREW_DISPATCH_JWT` (caller's user JWT) over `SUPABASE_SERVICE_ROLE_KEY`
 when possible; service-role bypasses RLS and the per-caller cap.
 
+**Safer prompt passing for special characters:** for prompts containing `$`,
+backticks, `\`, or arbitrary multi-line content, use `--prompt-base64`
+instead of `--prompt`. Encode with `printf '%s' "$TASK" | base64 | tr -d
+'\n'`. The CLI decodes with `validate=True` and rejects malformed input.
+This is the form the `Minicrew Mac Mini` custom agent uses internally; the
+slash skills (`/minicrew:dispatch`, `/minicrew:fanout`) also use it. The
+plain `--prompt` form remains supported for short, ASCII-only prompts.
+
 ## Overview
 
 End-to-end shape of dispatching from a peer Claude Code session:
@@ -247,6 +255,22 @@ handoff lifecycle. The short version:
    `jobs.result`. (handoff also: bundle the extended transcript outbound.)
 9. Cleanup: delete MCP bundle, delete clone, delete live log Storage prefix
    (if `delete_logs_on_completion: true`).
+
+### Recursion guard
+
+Worker sessions export `MINICREW_INSIDE_WORKER=1` in their runner-script
+environment. The dispatch CLI refuses to insert a new job when this env
+var is `1` (defense-in-depth: prevents workers from spawning workers
+indefinitely). The `Minicrew Mac Mini` custom agent body and the
+`routing-rules.md` CLAUDE.md fragment both check the same env var and
+return a refusal payload instead of dispatching.
+
+Custom dispatch callers (REST APIs, alternative SDKs, manual `python -m
+worker --dispatch` invocations) MUST NOT clear or override this env var
+inside a worker session. If you need to bypass the guard for an
+operational one-off (e.g. testing from a worker shell), `unset
+MINICREW_INSIDE_WORKER` in the current shell first — then re-set it
+before exiting so subsequent commands respect the guard.
 
 ## Trust model
 

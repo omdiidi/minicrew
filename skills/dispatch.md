@@ -37,6 +37,10 @@ Before constructing the dispatch, grep the prompt for these patterns:
 - `sk-` (Anthropic, OpenAI, Stripe live)
 - `sk_test_`, `sk_live_` (Stripe)
 - `ghp_`, `gho_`, `ghu_`, `ghs_` (GitHub tokens)
+- `github_pat_` (GitHub fine-grained PATs)
+- `glpat-` (GitLab PATs)
+- `dop_` (DigitalOcean tokens)
+- `npm_` (npm tokens)
 - `AKIA` (AWS access keys)
 - `ASIA` (AWS session tokens)
 - `AIza` (Google Cloud API keys)
@@ -77,12 +81,15 @@ references the worker can dereference, not literal values."
    let the CLI infer.
 2. Validate: prompt non-empty, repo starts with
    `https://github.com/`, sha is 40 hex chars.
-3. Build the bash command:
-   ```
+3. Build the bash command. Use `--prompt-base64` to bypass shell-quoting risk
+   for any `$`, backticks, `\`, or heredoc-delimiter strings in the task text.
+   The CLI also accepts `--prompt <text>` for short, ASCII-only prompts.
+   ```bash
+   B64=$(printf '%s' "<TASK>" | base64 | tr -d '\n')
    python -m worker --dispatch ad_hoc \
-     --repo <repo> --sha <sha> \
-     --prompt <prompt-shell-escaped> \
-     --wait --wait-seconds 1800
+     --repo "$REPO" --sha "$SHA" \
+     --wait --wait-seconds 1800 \
+     --prompt-base64 "$B64"
    ```
    Run via Bash tool. Capture stdout — it's a stream of JSON lines:
    - First line: `{"job_id": "...", "job_type": "...", "status": "pending"}`

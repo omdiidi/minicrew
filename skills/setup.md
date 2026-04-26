@@ -80,7 +80,24 @@ For each instance from 1 to N (where N is the instance count), run:
 
 If any instance install fails, stop and report the stderr. Do not continue silently.
 
-### 7. Verify
+### 7. Refresh skills and agents
+
+Re-copy the repo's skills and agents so any updates pulled in `git pull` are reflected in this user's Claude Code installation. Both copies are idempotent.
+
+```
+mkdir -p "$HOME/.claude/commands/minicrew"
+cp "$REPO_PATH"/skills/*.md "$HOME/.claude/commands/minicrew/"
+
+mkdir -p "$HOME/.claude/agents"
+cp "$REPO_PATH"/agents/*.md "$HOME/.claude/agents/"
+
+ls "$HOME/.claude/commands/minicrew/"
+ls "$HOME/.claude/agents/"
+```
+
+This mirrors `SETUP.md` Step 7 (the first-time install). If `agents/` does not exist in the repo (older minicrew checkout), skip the agents copy silently. If the user's Claude Code version pre-dates user-scoped agents discovery, the agents copy is inert (no harm).
+
+### 8. Verify
 
 Run:
 
@@ -98,7 +115,7 @@ tail -n 20 "$REPO_PATH/logs/worker-1.log"
 
 Look for a `worker_started` event in the output. If you don't see one within ~15 seconds, report what you did see and stop.
 
-### 8. Report
+### 9. Report
 
 Summarize to the user:
 - Instance count now running on this machine.
@@ -209,6 +226,23 @@ bash "$REPO_PATH/setup.sh" --workers $N --role "$ROLE"
 ```
 
 `setup.sh` will dispatch to `python -m worker.platform install` under the hood for each instance. If it fails, report the stderr verbatim and stop.
+
+### 7b. Refresh skills and agents
+
+Re-copy the repo's skills and agents so any updates pulled in `git pull` are reflected in this user's Claude Code installation. Both copies are idempotent.
+
+```
+mkdir -p "$HOME/.claude/commands/minicrew"
+cp "$REPO_PATH"/skills/*.md "$HOME/.claude/commands/minicrew/"
+
+mkdir -p "$HOME/.claude/agents"
+cp "$REPO_PATH"/agents/*.md "$HOME/.claude/agents/"
+
+ls "$HOME/.claude/commands/minicrew/"
+ls "$HOME/.claude/agents/"
+```
+
+This mirrors `SETUP.md` Step 8 (the first-time install). If `agents/` does not exist in the repo (older minicrew checkout), skip the agents copy silently. If the user's Claude Code version pre-dates user-scoped agents discovery, the agents copy is inert (no harm).
 
 ### 8. Optional: dedicated `minicrew` user (shared boxes only)
 

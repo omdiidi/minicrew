@@ -145,11 +145,13 @@ def extract_minicrew_result(reply_text: str) -> str:
     return base64.b64decode(b64).decode("utf-8", "strict")
 ```
 
-Truncation: the agent caps the pre-encode body at ~700KB. Above that, the agent
-emits a small JSON pointer (`{"truncated": true, "result_size": N, "job_id": ...,
-"preview": ..., "note": "fetch full result via supabase jobs row"}`) instead
-of the full body. The caller can fetch the full row from Supabase by `job_id`
-when the truncated flag is set.
+Truncation: the agent caps the pre-encode body at 700,000 bytes (NOT
+characters; the implementation uses `wc -c` after Chunk A's fix to handle
+multibyte UTF-8 correctly). Above that, the agent emits a small JSON pointer
+(`{"truncated": true, "result_size": N, "job_id": ..., "preview": ...,
+"note": "fetch full result via supabase jobs row"}`) instead of the full
+body. The caller can fetch the full row from Supabase by `job_id` when the
+truncated flag is set.
 
 ## Recursion guard
 

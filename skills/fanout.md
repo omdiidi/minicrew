@@ -31,6 +31,10 @@ Before constructing the dispatch, grep the prompt for these patterns:
 - `sk-` (Anthropic, OpenAI, Stripe live)
 - `sk_test_`, `sk_live_` (Stripe)
 - `ghp_`, `gho_`, `ghu_`, `ghs_` (GitHub tokens)
+- `github_pat_` (GitHub fine-grained PATs)
+- `glpat-` (GitLab PATs)
+- `dop_` (DigitalOcean tokens)
+- `npm_` (npm tokens)
 - `AKIA` (AWS access keys)
 - `ASIA` (AWS session tokens)
 - `AIza` (Google Cloud API keys)
@@ -56,12 +60,16 @@ Same as `/minicrew:dispatch`, plus:
    remote.origin.url` and `git rev-parse HEAD` in cwd, or let the
    CLI infer them).
 2. For i in 1..N, dispatch in parallel. Spawn N parallel Bash tool
-   calls in a single message — each call runs:
-   ```
+   calls in a single message. Use `--prompt-base64` to bypass shell-quoting
+   risk for any `$`, backticks, `\`, or heredoc-delimiter strings in the
+   task text. The CLI also accepts `--prompt <text>` for short, ASCII-only
+   prompts. Each call runs:
+   ```bash
+   B64=$(printf '%s' "<TASK>" | base64 | tr -d '\n')
    python -m worker --dispatch ad_hoc \
-     --repo <repo> --sha <sha> \
-     --prompt <prompt-shell-escaped> \
-     --wait --wait-seconds 1800
+     --repo "$REPO" --sha "$SHA" \
+     --wait --wait-seconds 1800 \
+     --prompt-base64 "$B64"
    ```
    Use `timeout=600000` on each Bash call. Each call's stdout is a
    stream of JSON lines:

@@ -40,6 +40,7 @@ in the environment first. See [DISPATCH.md](./DISPATCH.md#quick-cli-testing--one
 | Command | What |
 |---|---|
 | `python -m worker --dispatch ad_hoc --repo URL --sha SHA --prompt "..."` | Insert an `ad_hoc` job. Add `--wait` to block on terminal status. |
+| `python -m worker --dispatch ad_hoc --prompt-base64 BASE64 ...` | Use base64-encoded prompt (bypass shell quoting; safer for prompts containing $, backticks, heredoc delimiters). Mutually exclusive with `--prompt`. |
 | `python -m worker --dispatch handoff --repo URL --sha SHA --session-id UUID --bundle-id UUID` | Insert a `handoff` job. Bundle must be pre-registered via `dispatch_register_transcript_bundle`. |
 | `python -m worker --dispatch ... --allow-code-push` | Allow the remote session to push a result branch. |
 
@@ -67,7 +68,7 @@ Example:
 python -m worker.config.loader --validate ./worker-config
 ```
 
-## Skills (slash commands inside Claude Code, after `bash setup.sh`)
+## Skills (slash commands inside Claude Code, after `SETUP.md` Step 7/8)
 
 Installed under `~/.claude/commands/minicrew/`. See [SKILLS-INTEGRATION.md](./SKILLS-INTEGRATION.md).
 

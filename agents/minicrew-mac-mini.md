@@ -42,6 +42,10 @@ any match, REFUSE inside the markers:
 - `sk-` (Anthropic, OpenAI, Stripe live)
 - `sk_test_`, `sk_live_` (Stripe)
 - `ghp_`, `gho_`, `ghu_`, `ghs_` (GitHub tokens)
+- `github_pat_` (GitHub fine-grained PATs)
+- `glpat-` (GitLab PATs)
+- `dop_` (DigitalOcean tokens)
+- `npm_` (npm tokens)
 - `AKIA` (AWS access keys)
 - `ASIA` (AWS session tokens)
 - `AIza` (Google Cloud API keys)
@@ -113,7 +117,7 @@ If any match, return inside the markers:
 
    ```bash
    JSON_BODY=$(printf '%s' "$RAW_RESULT")
-   SIZE=${#JSON_BODY}
+   SIZE=$(LANG=C printf '%s' "$JSON_BODY" | wc -c | tr -d ' ')
    if [ "$SIZE" -ge 700000 ]; then
        # Truncated branch: emit a small JSON pointer instead of the
        # full body. Caller fetches via Supabase row by job_id.

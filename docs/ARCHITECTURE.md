@@ -62,6 +62,9 @@ worker's `~/.claude/agents/` (e.g. on a developer machine that is also a
 worker host). Full details and the caller-side base64 extraction helper live
 in `docs/SUBAGENT-INTEGRATION.md`.
 
+See [COMMANDS.md](./COMMANDS.md#dispatch-insert-a-job-from-the-cli) for the
+flat command reference.
+
 ## Runtime topology
 
 A deployment is one or more Mac Minis. Each machine runs one to five worker instances supervised

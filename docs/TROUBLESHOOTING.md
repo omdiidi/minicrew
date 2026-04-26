@@ -680,28 +680,25 @@ The `python -m worker --dispatch` CLI keeps working (it's the load-bearing
 primitive); only the slash-command, custom-agent, and prose-discovery
 surfaces are removed.
 
-## Caller-side base64 extraction returns garbled text or U+FFFD characters
+## Caller-side base64 extraction raises UnicodeDecodeError
 
 ### Symptom
 Calling Claude received a `Task(subagent_type="Minicrew Mac Mini", ...)`
-reply, extracted the body between `===MINICREW_B64_BEGIN===` markers, but
-the decoded string contains the Unicode replacement character (U+FFFD,
-`�`) or is otherwise garbled.
+reply, extracted the body between `===MINICREW_B64_BEGIN===` markers, and
+the decoder raised `UnicodeDecodeError`.
 
 ### Cause
-The example extraction helper in `docs/SUBAGENT-INTEGRATION.md` uses
-`.decode("utf-8", "replace")`, which silently substitutes invalid bytes.
+The shipped extraction helper in `docs/SUBAGENT-INTEGRATION.md` uses
+`.decode("utf-8", "strict")`, which raises immediately on invalid bytes.
 A worker that returned non-UTF-8 bytes (binary blob, mis-encoded text)
-passes through corrupted but doesn't error.
+surfaces the failure rather than silently substituting `U+FFFD`.
 
 ### Fix
-Switch to strict decoding to catch corruption early:
-```python
-bundle_text = base64.b64decode(b64).decode("utf-8", "strict")
-```
-`UnicodeDecodeError` will surface immediately and the calling Claude can
-either retry or surface the failure. Strict decode is recommended for
-any caller that processes the result programmatically.
+This is intentional. To accept lossy decode (replace invalid bytes with
+`U+FFFD`), change `"strict"` to `"replace"` in your local copy of the
+extraction helper. Strict mode is recommended for any caller that
+processes the result programmatically — silent corruption is harder to
+debug than a raised exception.
 
 ## Operator: driving Mac Mini via Chrome Remote Desktop
 
